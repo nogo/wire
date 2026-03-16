@@ -133,3 +133,42 @@ model: sonnet
   ─────────────────────────────────────────────────────
   Finished: 2026-03-16 23:39:06  (15m 56s)
   Status:   ✓ OK
+  Commit:   ✓ 7c34559  wu-03: Route requests through HTTP gateway
+  Changes:   12 files changed, 768 insertions(+), 1 deletion(-)
+  Moved:    → .forge/done/wu-03.md
+  ─────────────────────────────────────────────────────
+
+
+wu-04: Add CLI commands
+model: sonnet
+
+  Prompt:  112 lines  (5578 bytes)
+  Log:     /home/nogo/Development/projects/inference/.forge/wu/wu-04.log
+
+  Started: 2026-03-16 23:39:06
+
+  [23:39:12]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/cmd/wire/main.go"}
+  [23:39:12]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/config/config.g…
+  [23:39:13]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/process/manager…
+  [23:39:13]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/gateway/gateway…
+  [23:39:16]  💬 Let me also check the go.mod and any existing tests:
+  [23:39:16]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/go.mod"}
+  [23:39:17]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/inference/**/*_test.go"}
+  [23:44:29]  💬 Let me check the existing tests for patterns before writing:
+  [23:44:29]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/process/manager…
+  [23:44:32]  💬 Good. Now I'll write the three files.
+  [23:45:13]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/inference/internal/cli/cli.go","co…
+  [23:45:21]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/inference/internal/cli/cli_test.go…
+  [23:45:24]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/inference/cmd/wire/main.go","conte…
+  [23:45:26]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [23:45:28]  ⚙  Bash  {"command":"go test ./... 2>&1","description":"Run all tests"}
+  [23:45:39]  💬 All passing. Here's what was written:
+
+**`internal/cli/cli.go`** — 4 commands + helpers:
+- `Run(args)` / `dispatch(args)
+
+  [23:45:39]  ✅ Done — tokens: 11 in / 27708 out | cost: $0.71078055
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-03-16 23:45:39  (6m 33s)
+  Status:   ✓ OK

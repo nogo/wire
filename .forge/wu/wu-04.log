@@ -1,0 +1,12 @@
+All passing. Here's what was written:
+
+**`internal/cli/cli.go`** — 4 commands + helpers:
+- `Run(args)` / `dispatch(args)` — switch-based dispatch, no third-party libs
+- `runStart()` — writes PID (race-safe via `O_CREATE|O_EXCL`), starts manager on `bgCtx`, gateway on `shutCtx` (signal context), main loop selects on `gwErrCh`/`shutCtx.Done()`/`sighupCh`; SIGHUP goroutines serialised by `swapMu.TryLock()`; graceful shutdown sequences gateway drain before cancelling process manager
+- `runStop()` — sends SIGTERM, polls `kill -0` up to 10s, falls back to SIGKILL
+- `runStatus()` — queries `/health` and `/v1/models`, exits 1 on connection refused
+- `runSwap()` — validates backend is managed, writes config atomically (temp file + rename), sends SIGHUP
+
+**`internal/cli/cli_test.go`** — tests for dispatch with no args, help flags, unknown commands, swap missing args, and `listenURL` formatting
+
+**`cmd/wire/main.go`** — reduced to `os.Exit(cli.Run(os.Args[1:]))`
