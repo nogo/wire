@@ -1,0 +1,20 @@
+All tests pass. Here's what was implemented:
+
+**`internal/process/manager.go`**
+- `Manager` with a `cmdBuilder` hook for testability
+- `Start` — spawns per-backend supervisor goroutines, returns immediately
+- `Stop` — cancels context, waits for all supervisors to exit (via `sync.WaitGroup`)
+- `Healthy` / `Addr` — thread-safe reads; external backends use best-effort GET /health
+- `Swap` — sends a request to the running supervisor via a buffered channel, waits for result
+- `supervise` — retry loop (5 retries in 60s window, 2s backoff); uses `cmd.Cancel = SIGTERM` + `cmd.WaitDelay = 10s` for clean shutdown; `defer` clears `healthy`/`proc` on exit
+- `lineLogger` — buffers subprocess output by newline, emits via `slog.Debug`
+- `errors.AsType[*exec.ExitError]` for typed exit code logging
+
+**`internal/process/manager_test.go`**
+- `TestHelperProcess` subprocess pattern — test binary runs as a fake llama-server when `GO_WANT_HELPER_PROCESS=1`
+- Unit tests for `buildArgs` and `freePort`
+- External backend tests using `httptest.Server`
+- Integration tests for start/stop lifecycle and hot-swap
+
+**`cmd/wire/main.go`**
+- `signal.NotifyContext` for SIGTERM/SIGINT, `context.Cause` for shutdown logging, blocks on `<-ctx.Done()`

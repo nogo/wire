@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/process"
 )
 
 func main() {
@@ -37,5 +41,26 @@ func main() {
 				"provider", b.Provider,
 			)
 		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	mgr := process.New(cfg, slog.Default())
+	if err := mgr.Start(ctx); err != nil {
+		slog.Error("failed to start process manager", "error", err)
+		os.Exit(1)
+	}
+
+	<-ctx.Done()
+
+	if cause := context.Cause(ctx); cause != nil {
+		slog.Info("shutting down", "cause", cause)
+	}
+	stop() // release signal resources
+
+	if err := mgr.Stop(); err != nil {
+		slog.Error("error stopping process manager", "error", err)
+		os.Exit(1)
 	}
 }
