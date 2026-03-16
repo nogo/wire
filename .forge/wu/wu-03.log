@@ -1,0 +1,14 @@
+Build passes, all tests pass. Here's what was created/modified:
+
+**`internal/gateway/route.go`** — Route table built at startup. Backend name always registered; for managed backends, also registers full HF ref, repo name, filename stem (`Model-Quant`, what llama-server reports), and short form without GGUF/quant.
+
+**`internal/gateway/gateway.go`** — HTTP server with:
+- `POST /v1/{chat/completions,completions,embeddings,rerank}` — extracts `model` via `TeeReader` (no full-body buffering), resolves backend, checks health, proxies via `httputil.ReverseProxy` with `Rewrite` + `FlushInterval: -1`
+- `ModifyResponse` wraps the response body with `replacingReader` — streaming byte-level replacement of llama-server model names → backend name; removes `Content-Length` to allow chunked transfer
+- `GET /v1/models` — queries all backends concurrently, rewrites model IDs to backend names
+- `GET /health` — 200/503 based on any healthy backend
+- OpenAI error format throughout
+
+**`internal/gateway/gateway_test.go`** — Tests for alias derivation, route resolution, health, error cases (unknown model, missing model, unhealthy backend, no backends), proxy+rewrite correctness, and body preservation.
+
+**`cmd/wire/main.go`** — Creates gateway after process manager and calls `ListenAndServe(ctx)`.

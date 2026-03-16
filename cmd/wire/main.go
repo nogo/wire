@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/gateway"
 	"github.com/nogo/wire/internal/process"
 )
 
@@ -52,7 +53,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	<-ctx.Done()
+	gw := gateway.New(cfg, mgr, slog.Default())
+	if err := gw.ListenAndServe(ctx); err != nil {
+		slog.Error("gateway error", "error", err)
+		os.Exit(1)
+	}
 
 	if cause := context.Cause(ctx); cause != nil {
 		slog.Info("shutting down", "cause", cause)
