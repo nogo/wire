@@ -1,0 +1,14 @@
+All done. Here's what was created:
+
+| File | Purpose |
+|------|---------|
+| `go.mod` | Module `github.com/nogo/wire`, Go 1.26, `gopkg.in/yaml.v3` only |
+| `internal/config/config.go` | Types, `Load()`, `applyDefaults`, `validate`, `ValidationError` |
+| `internal/config/config_test.go` | 5 tests covering all required scenarios |
+| `cmd/wire/main.go` | Entry point using `slog` throughout |
+
+Key design notes:
+- `WIRE_CONFIG` env var → `XDG_CONFIG_HOME/wire/config.yaml` → `~/.config/wire/config.yaml` resolution order
+- `yaml.KnownFields(true)` rejects typo'd field names
+- `errors.AsType[*ValidationError]` used in tests for typed error inspection
+- `new(Config)` and `for range n` idioms used as required

@@ -1,0 +1,23 @@
+# Build
+/wire
+/dist/
+
+# Dependencies
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage.out
+*.test
+
+# llama.cpp build artifacts
+build/
