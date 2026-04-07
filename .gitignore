@@ -20,4 +20,4 @@ coverage.out
 *.test
 
 # llama.cpp build artifacts
-build/
+/build/

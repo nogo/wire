@@ -3,14 +3,11 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,11 +15,10 @@ import (
 
 	"flag"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/nogo/wire/internal/build"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/gateway"
+	"github.com/nogo/wire/internal/pidfile"
 	"github.com/nogo/wire/internal/process"
 )
 
@@ -83,97 +79,6 @@ func dispatch(args []string) error {
 	}
 }
 
-// pidFilePath returns the path to the PID file.
-func pidFilePath() string {
-	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return filepath.Join(dir, "wire.pid")
-	}
-	return "/tmp/wire.pid"
-}
-
-// writePID creates the PID file exclusively, removing stale files where
-// the recorded process is no longer alive.
-func writePID(path string) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("creating PID file %s: %w", path, err)
-		}
-		// File exists: check whether the recorded process is alive.
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return fmt.Errorf("reading PID file: %w", readErr)
-		}
-		pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
-		if parseErr == nil {
-			proc, _ := os.FindProcess(pid)
-			if proc.Signal(syscall.Signal(0)) == nil {
-				return fmt.Errorf("wire is already running (pid %d)", pid)
-			}
-		}
-		// Stale file: remove and retry once.
-		slog.Info("removing stale PID file", "path", path)
-		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("removing stale PID file: %w", removeErr)
-		}
-		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-		if err != nil {
-			return fmt.Errorf("creating PID file after stale removal: %w", err)
-		}
-	}
-	defer f.Close()
-	_, err = fmt.Fprintf(f, "%d\n", os.Getpid())
-	return err
-}
-
-// readPID reads the PID from the PID file.
-func readPID(path string) (int, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, fmt.Errorf("wire is not running (no PID file at %s)", path)
-		}
-		return 0, fmt.Errorf("reading PID file: %w", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, fmt.Errorf("invalid PID file: %w", err)
-	}
-	return pid, nil
-}
-
-// configFilePath mirrors config.configPath so that cli can locate the file
-// without modifying the config package.
-func configFilePath() string {
-	if v := os.Getenv("WIRE_CONFIG"); v != "" {
-		return v
-	}
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, "wire", "config.yaml")
-}
-
-// writeConfigFile marshals cfg to YAML and atomically replaces the config file.
-func writeConfigFile(cfg *config.Config) error {
-	path := configFilePath()
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("writing config temp file: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("renaming config file: %w", err)
-	}
-	return nil
-}
-
 // listenURL converts the listen address from config to an http:// URL.
 func listenURL(listen string) string {
 	if strings.HasPrefix(listen, ":") {
@@ -188,8 +93,8 @@ func runStart() error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	pidPath := pidFilePath()
-	if err := writePID(pidPath); err != nil {
+	pidPath := pidfile.Path()
+	if err := pidfile.Write(pidPath); err != nil {
 		return err
 	}
 	defer os.Remove(pidPath)
@@ -274,8 +179,8 @@ func runStart() error {
 }
 
 func runStop() error {
-	pidPath := pidFilePath()
-	pid, err := readPID(pidPath)
+	pidPath := pidfile.Path()
+	pid, err := pidfile.Read(pidPath)
 	if err != nil {
 		return err
 	}
@@ -379,12 +284,12 @@ func runSwap(backend, model string) error {
 
 	b.Model = model
 	cfg.Backends[backend] = b
-	if err := writeConfigFile(cfg); err != nil {
+	if err := config.WriteFile(cfg); err != nil {
 		return err
 	}
 
-	pidPath := pidFilePath()
-	pid, err := readPID(pidPath)
+	pidPath := pidfile.Path()
+	pid, err := pidfile.Read(pidPath)
 	if err != nil {
 		return err
 	}

@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nogo/wire/internal/anthropic"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/process"
+	"github.com/nogo/wire/internal/translate/anthropic"
 )
 
 // backendManager is the subset of process.Manager the Gateway depends on.

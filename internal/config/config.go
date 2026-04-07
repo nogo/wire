@@ -10,6 +10,39 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Path returns the resolved config file path.
+// Resolution order: WIRE_CONFIG env var → XDG_CONFIG_HOME/wire/config.yaml →
+// ~/.config/wire/config.yaml.
+func Path() string {
+	if v := os.Getenv("WIRE_CONFIG"); v != "" {
+		return v
+	}
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, ".config")
+	}
+	return filepath.Join(base, "wire", "config.yaml")
+}
+
+// WriteFile marshals cfg to YAML and atomically replaces the config file.
+func WriteFile(cfg *Config) error {
+	path := Path()
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("writing config temp file: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("renaming config file: %w", err)
+	}
+	return nil
+}
+
 type Config struct {
 	Listen   string             `yaml:"listen"`
 	Backends map[string]Backend `yaml:"backends"`
@@ -50,7 +83,7 @@ func (e *ValidationError) Error() string {
 // Path resolution order: WIRE_CONFIG env var → XDG_CONFIG_HOME/wire/config.yaml →
 // ~/.config/wire/config.yaml.
 func Load() (*Config, error) {
-	path := configPath()
+	path := Path()
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -74,18 +107,6 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
-}
-
-func configPath() string {
-	if v := os.Getenv("WIRE_CONFIG"); v != "" {
-		return v
-	}
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, "wire", "config.yaml")
 }
 
 func applyDefaults(cfg *Config) {
