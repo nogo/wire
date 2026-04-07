@@ -138,6 +138,13 @@ func (h *Hub) Subscribe() (<-chan HubMessage, func()) {
 	}
 }
 
+// Statuses returns the current runtime state of all managed backends by
+// delegating to the snapshotFn provided at construction. Safe to call
+// concurrently.
+func (h *Hub) Statuses() []BackendStatus {
+	return h.snapshotFn()
+}
+
 // Snapshot returns a copy of the current full state synchronously.
 func (h *Hub) Snapshot() HubSnapshot {
 	h.mu.RLock()

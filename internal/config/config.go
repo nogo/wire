@@ -47,6 +47,7 @@ type Config struct {
 	Listen   string             `yaml:"listen"`
 	Backends map[string]Backend `yaml:"backends"`
 	Peers    []string           `yaml:"peers"`
+	Monitor  bool               `yaml:"monitor"`
 }
 
 type Backend struct {

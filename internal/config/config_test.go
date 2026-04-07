@@ -188,6 +188,41 @@ backends:
 	}
 }
 
+func TestLoad_MonitorTrue(t *testing.T) {
+	path := writeConfig(t, `
+backends:
+  ext:
+    url: "http://localhost:11434"
+monitor: true
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Monitor {
+		t.Error("monitor: got false, want true")
+	}
+}
+
+func TestLoad_MonitorDefault(t *testing.T) {
+	path := writeConfig(t, `
+backends:
+  ext:
+    url: "http://localhost:11434"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Monitor {
+		t.Error("monitor default: got true, want false")
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		func() bool {

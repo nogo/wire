@@ -19,6 +19,7 @@ import (
 	"github.com/nogo/wire/internal/build"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/gateway"
+	"github.com/nogo/wire/internal/monitor"
 	"github.com/nogo/wire/internal/pidfile"
 	"github.com/nogo/wire/internal/process"
 )
@@ -122,7 +123,14 @@ func runStart() error {
 		return fmt.Errorf("starting process manager: %w", err)
 	}
 
-	gw := gateway.New(cfg, mgr, slog.Default())
+	var hub *monitor.Hub
+	if cfg.Monitor {
+		hub = monitor.NewHub(slog.Default(), mgr.Events(), mgr.Snapshot)
+		hub.Start()
+		defer hub.Stop()
+	}
+
+	gw := gateway.New(cfg, mgr, hub, slog.Default())
 	gwErrCh := make(chan error, 1)
 	go func() { gwErrCh <- gw.ListenAndServe(shutCtx) }()
 

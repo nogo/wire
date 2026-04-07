@@ -1,0 +1,16 @@
+`go build ./...` and `go test ./...` both pass. Here's what was done:
+
+**Created:**
+- `internal/monitor/websocket.go` — WS handler: upgrades connection, sends snapshot, streams hub messages as JSON, discard-goroutine for close detection
+- `internal/monitor/page.go` — `go:embed` + `HandlePage`
+- `internal/monitor/page.html` — dark-theme dashboard using pure DOM APIs (no innerHTML with dynamic data)
+- `internal/monitor/websocket_test.go` — 4 tests: snapshot on connect, metrics forwarded, hub stop closes connection, page handler
+
+**Modified:**
+- `internal/config/config.go` — added `Monitor bool \`yaml:"monitor"\``
+- `internal/config/config_test.go` — added `TestLoad_MonitorTrue` and `TestLoad_MonitorDefault`
+- `internal/monitor/hub.go` — added `Statuses() []BackendStatus` (delegates to `snapshotFn`)
+- `internal/gateway/gateway.go` — `New`/`newGateway` accept `*monitor.Hub`; registers `/monitor` and `/monitor/ws` when non-nil
+- `internal/gateway/gateway_test.go` — updated 7 `newGateway` call sites to pass `nil` hub
+- `internal/cli/cli.go` — creates/starts/stops hub in `runStart()` when `cfg.Monitor` is true
+- `go.mod` — added `nhooyr.io/websocket v1.8.17`

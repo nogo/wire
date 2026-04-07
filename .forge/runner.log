@@ -664,3 +664,114 @@ model: sonnet
 
   Running full test suite...
   Tests:    ✓ all green
+  ⚠ Skipping large file (>1MB): bin/wire
+  Commit:   ✓ 5a7f41e  wu-07: Parse llama-server events and collect metrics
+  Changes:   18 files changed, 1785 insertions(+), 70 deletions(-)
+  Moved:    → .forge/done/wu-07.md
+  ─────────────────────────────────────────────────────
+
+
+wu-08: Serve live monitor dashboard via websocket
+model: sonnet
+
+  Prompt:  236 lines  (11128 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-08.log
+
+  Started: 2026-04-08 00:14:56
+
+  [00:15:02]  ⚙  Agent  {"description":"Explore codebase structure","subagent_type":"Explore","prompt":"…
+  [00:15:03]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [00:15:04]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/event.go"}
+  [00:15:04]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu.go"}
+  [00:15:04]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [00:15:04]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [00:15:04]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config_test.g…
+  [00:15:04]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [00:15:05]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go"}
+  [00:15:05]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/go.mod"}
+  [00:15:23]  💬 Let me read the actual file contents directly.
+  [00:15:23]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [00:15:23]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/event.go"}
+  [00:15:23]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu.go"}
+  [00:15:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [00:15:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [00:15:27]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go"}
+  [00:15:29]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config_test.g…
+  [00:15:30]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/go.mod"}
+  [00:15:32]  💬 Let me also check what other files exist in the monitor package.
+  [00:15:33]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/wire/internal/monitor/*.go"}
+  [00:15:35]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub_test.go"…
+  [00:15:35]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/metrics.go"}
+  [00:15:43]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [00:21:33]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/wire/internal/gateway/*_test.go"}
+  [00:21:38]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway_test…
+  [00:22:02]  💬 Now I have a complete picture. Let me implement everything. Starting with getting the websocket dependency, then writing
+  [00:22:03]  ⚙  ToolSearch  {"query":"select:TodoWrite","max_results":1}
+  [00:22:10]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:22:13]  ⚙  Bash  {"command":"go get nhooyr.io/websocket 2>&1","description":"Add nhooyr.io/websoc…
+  [00:22:21]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:22:25]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:22:30]  💬 Now add config tests for the Monitor field:
+  [00:22:33]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:22:38]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:22:44]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:22:51]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:23:22]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/websocket.go…
+  [00:23:25]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/page.go","co…
+  [00:23:28]  💬 Now create the dashboard HTML:
+  [00:24:18]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/page.html","…
+  [00:25:02]  💬 The hook flagged `innerHTML` with dynamic content. I'll restructure to use DOM APIs for all dynamic content — genuinely 
+  [00:25:57]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/page.html","…
+  [00:26:05]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:26:39]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/websocket_te…
+  [00:26:45]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:26:49]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:26:57]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:27:00]  💬 Now update gateway_test.go to pass `nil` for hub:
+  [00:27:02]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:27:04]  ⚙  Edit  {"replace_all":true,"file_path":"/home/nogo/Development/projects/wire/internal/g…
+  [00:27:07]  ⚙  Edit  {"replace_all":true,"file_path":"/home/nogo/Development/projects/wire/internal/g…
+  [00:27:11]  💬 Now update cli.go:
+  [00:27:14]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:27:18]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:27:23]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:27:27]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:27:29]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [00:27:33]  ⚙  Bash  {"command":"go test ./... 2>&1","description":"Run all tests"}
+  [00:27:38]  💬 All packages build and all tests pass.
+  [00:27:41]  ⚙  TodoWrite  {"todos":[{"content":"Add nhooyr.io/websocket dependency","activeForm":"Adding n…
+  [00:27:50]  💬 `go build ./...` and `go test ./...` both pass. Here's what was done:
+
+**Created:**
+- `internal/monitor/websocket.go` — 
+
+  [00:27:50]  ✅ Done — tokens: 43 in / 55269 out | cost: $2.1456021499999998
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 00:27:50  (12m 54s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✗ FAILED
+[vet] $ go vet ./...
+[lint] $ if command -v staticcheck >/dev/null 2>&1; then
+[lint] staticcheck not installed, skipping
+[lint] Finished in 7.1ms
+[fmt:check] Finished in 35.3ms
+[tidy] FAIL: go.mod/go.sum updated by tidy — commit the changes
+[vet] Finished in 800.6ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[test] ?   	github.com/nogo/wire/internal	[no test files]
+[test] ?   	github.com/nogo/wire/internal/build	[no test files]
+[test] ok  	github.com/nogo/wire/internal/cli	1.021s
+[test] ok  	github.com/nogo/wire/internal/config	1.021s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.029s
+[test] ok  	github.com/nogo/wire/internal/monitor	2.185s
+[test] ?   	github.com/nogo/wire/internal/pidfile	[no test files]
+[test] ok  	github.com/nogo/wire/internal/process	7.247s
+[test] ok  	github.com/nogo/wire/internal/translate/anthropic	1.020s
+[test] Finished in 9.31s
+Finished in 9.34s
+[tidy] ERROR task failed
+
+  ⚠ /home/nogo/Development/projects/wire/.forge/wu/wu-08.md failed — pausing. Fix and restart, or Ctrl-C to stop.

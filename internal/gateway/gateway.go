@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/monitor"
 	"github.com/nogo/wire/internal/process"
 	"github.com/nogo/wire/internal/translate/anthropic"
 )
@@ -34,11 +35,12 @@ type Gateway struct {
 }
 
 // New creates a Gateway backed by the given process manager.
-func New(cfg *config.Config, mgr *process.Manager, log *slog.Logger) *Gateway {
-	return newGateway(cfg, mgr, log)
+// hub may be nil; when non-nil, /monitor and /monitor/ws routes are registered.
+func New(cfg *config.Config, mgr *process.Manager, hub *monitor.Hub, log *slog.Logger) *Gateway {
+	return newGateway(cfg, mgr, hub, log)
 }
 
-func newGateway(cfg *config.Config, mgr backendManager, log *slog.Logger) *Gateway {
+func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, log *slog.Logger) *Gateway {
 	g := &Gateway{cfg: cfg, mgr: mgr, log: log, rt: buildRouteTable(cfg)}
 
 	mux := http.NewServeMux()
@@ -48,6 +50,11 @@ func newGateway(cfg *config.Config, mgr backendManager, log *slog.Logger) *Gatew
 	mux.HandleFunc("POST /v1/rerank", g.handleRoute)
 	mux.HandleFunc("GET /v1/models", g.handleModels)
 	mux.HandleFunc("GET /health", g.handleHealth)
+
+	if hub != nil {
+		mux.HandleFunc("GET /monitor", monitor.HandlePage)
+		mux.HandleFunc("GET /monitor/ws", monitor.HandleWS(hub))
+	}
 
 	g.server = &http.Server{Addr: cfg.Listen, Handler: mux}
 	return g

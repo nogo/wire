@@ -89,7 +89,7 @@ func TestGateway_Health(t *testing.T) {
 			addrs:   map[string]string{"chat": "http://localhost:9999"},
 			healthy: map[string]bool{"chat": true},
 		}
-		g := newGateway(cfg, mgr, slog.Default())
+		g := newGateway(cfg, mgr, nil, slog.Default())
 		w := httptest.NewRecorder()
 		g.handleHealth(w, httptest.NewRequest(http.MethodGet, "/health", nil))
 		if w.Code != http.StatusOK {
@@ -102,7 +102,7 @@ func TestGateway_Health(t *testing.T) {
 			addrs:   map[string]string{},
 			healthy: map[string]bool{"chat": false},
 		}
-		g := newGateway(cfg, mgr, slog.Default())
+		g := newGateway(cfg, mgr, nil, slog.Default())
 		w := httptest.NewRecorder()
 		g.handleHealth(w, httptest.NewRequest(http.MethodGet, "/health", nil))
 		if w.Code != http.StatusServiceUnavailable {
@@ -118,7 +118,7 @@ func TestGateway_HandleRoute_UnknownModel(t *testing.T) {
 			"chat": {Model: "owner/model-GGUF:Q4"},
 		},
 	}
-	g := newGateway(cfg, &mockManager{}, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -135,7 +135,7 @@ func TestGateway_HandleRoute_MissingModel(t *testing.T) {
 		Listen:   ":0",
 		Backends: map[string]config.Backend{"chat": {Model: "owner/model-GGUF:Q4"}},
 	}
-	g := newGateway(cfg, &mockManager{}, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -158,7 +158,7 @@ func TestGateway_HandleRoute_UnhealthyBackend(t *testing.T) {
 		addrs:   map[string]string{"chat": "http://localhost:9999"},
 		healthy: map[string]bool{"chat": false},
 	}
-	g := newGateway(cfg, mgr, slog.Default())
+	g := newGateway(cfg, mgr, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -191,7 +191,7 @@ func TestGateway_HandleRoute_ProxyAndRewrite(t *testing.T) {
 		addrs:   map[string]string{"chat": backend.URL},
 		healthy: map[string]bool{"chat": true},
 	}
-	g := newGateway(cfg, mgr, slog.Default())
+	g := newGateway(cfg, mgr, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -232,7 +232,7 @@ func TestGateway_HandleRoute_BodyPreserved(t *testing.T) {
 		addrs:   map[string]string{"m": backend.URL},
 		healthy: map[string]bool{"m": true},
 	}
-	g := newGateway(cfg, mgr, slog.Default())
+	g := newGateway(cfg, mgr, nil, slog.Default())
 
 	original := `{"model":"m","messages":[{"role":"user","content":"` + strings.Repeat("x", 1000) + `"}]}`
 	w := httptest.NewRecorder()
@@ -265,7 +265,7 @@ func TestGateway_Models(t *testing.T) {
 		addrs:   map[string]string{"chat": backend.URL},
 		healthy: map[string]bool{"chat": true},
 	}
-	g := newGateway(cfg, mgr, slog.Default())
+	g := newGateway(cfg, mgr, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	g.handleModels(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -296,7 +296,7 @@ func TestGateway_Models(t *testing.T) {
 
 func TestGateway_NoBackends(t *testing.T) {
 	cfg := &config.Config{Listen: ":0", Backends: map[string]config.Backend{}}
-	g := newGateway(cfg, &mockManager{}, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",

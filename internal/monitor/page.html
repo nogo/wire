@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>wire monitor</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0d1117; color: #e6edf3; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; padding: 16px; }
+
+#header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #21262d; padding-bottom: 12px; }
+#header h1 { font-size: 14px; font-weight: normal; color: #7d8590; letter-spacing: 0.05em; }
+#header h1 span { color: #e6edf3; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; flex-shrink: 0; }
+.dot.disconnected { background: #f85149; }
+#conn-label { font-size: 11px; color: #7d8590; margin-left: auto; }
+
+.section { margin-bottom: 20px; }
+.section.hidden { display: none; }
+.section-title { font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 10px; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 14px; }
+.card-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+.card-name { font-size: 13px; font-weight: bold; color: #58a6ff; }
+.card-sub { font-size: 11px; color: #7d8590; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: bold; flex-shrink: 0; margin-left: 8px; }
+.badge.healthy   { background: #1a2e1a; color: #3fb950; border: 1px solid #2ea043; }
+.badge.unhealthy { background: #2e1a1a; color: #f85149; border: 1px solid #da3633; }
+.badge.swapping  { background: #2a2512; color: #d29922; border: 1px solid #9e6a03; }
+
+.bar-row { margin-bottom: 8px; }
+.bar-label { display: flex; justify-content: space-between; font-size: 10px; color: #7d8590; margin-bottom: 3px; }
+.bar-track { background: #21262d; border-radius: 2px; height: 7px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
+.bar-fill.kv     { background: #388bfd; }
+.bar-fill.vram   { background: #6e40c9; }
+.bar-fill.gpu    { background: #1abc9c; }
+.bar-fill.warn   { background: #d29922; }
+.bar-fill.danger { background: #f85149; }
+
+.metrics-row { display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.metric { min-width: 70px; }
+.metric-label { font-size: 10px; color: #484f58; margin-bottom: 1px; }
+.metric-value { font-size: 15px; font-weight: bold; }
+.temp-ok   { color: #3fb950; }
+.temp-warn { color: #d29922; }
+.temp-hot  { color: #f85149; }
+
+.slots { margin-top: 8px; border-top: 1px solid #21262d; }
+.slot-row { display: grid; grid-template-columns: 24px 90px 1fr 1fr; gap: 4px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid #161b22; }
+.slot-id { color: #484f58; }
+.slot-state.generating { color: #3fb950; }
+.slot-state.idle       { color: #30363d; }
+.slot-tokens { text-align: right; color: #7d8590; }
+.slot-ctx    { text-align: right; color: #484f58; }
+
+#log-entries { font-size: 11px; border: 1px solid #21262d; border-radius: 4px; max-height: 280px; overflow-y: auto; }
+.log-row { display: grid; grid-template-columns: 68px 110px 72px 80px 1fr; gap: 6px; padding: 3px 8px; border-bottom: 1px solid #161b22; align-items: center; }
+.log-row:last-child { border-bottom: none; }
+.log-time    { color: #484f58; }
+.log-backend { color: #58a6ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-tokens  { text-align: right; color: #7d8590; }
+.log-toks    { text-align: right; color: #3fb950; }
+.log-kind    { color: #484f58; }
+.log-empty   { padding: 8px; color: #484f58; text-align: center; }
+</style>
+</head>
+<body>
+<div id="header">
+  <div class="dot" id="dot"></div>
+  <h1><span>wire</span> monitor</h1>
+  <span id="conn-label">connecting…</span>
+</div>
+
+<div id="gpu-section" class="section hidden">
+  <div class="section-title">GPU</div>
+  <div class="cards" id="gpu-cards"></div>
+</div>
+
+<div id="backend-section" class="section">
+  <div class="section-title">Backends</div>
+  <div class="cards" id="backend-cards"></div>
+</div>
+
+<div id="log-section" class="section">
+  <div class="section-title">Request Log</div>
+  <div id="log-entries"></div>
+</div>
+
+<script>
+"use strict";
+
+const MAX_LOG = 100;
+let logEntries = [];
+let ws, reconnTimer;
+
+// DOM helpers — all dynamic values are set via textContent, never innerHTML.
+function el(tag, cls) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  return e;
+}
+function span(cls, text) {
+  const e = el("span", cls);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function div(cls) { return el("div", cls); }
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(proto + "//" + location.host + "/monitor/ws");
+
+  ws.onopen = () => {
+    document.getElementById("dot").classList.remove("disconnected");
+    document.getElementById("conn-label").textContent = "connected";
+    clearTimeout(reconnTimer);
+    reconnTimer = null;
+  };
+
+  ws.onclose = ws.onerror = () => {
+    document.getElementById("dot").classList.add("disconnected");
+    document.getElementById("conn-label").textContent = "disconnected \u2014 reconnecting\u2026";
+    if (!reconnTimer) reconnTimer = setTimeout(connect, 3000);
+  };
+
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      switch (msg.type) {
+        case "snapshot": onSnapshot(msg); break;
+        case "gpu":      onGPU(msg);      break;
+        case "metrics":  onMetrics(msg);  break;
+        case "event":    onEvent(msg);    break;
+        case "state":    onState(msg);    break;
+      }
+    } catch (_) {}
+  };
+}
+
+// ── Snapshot ──────────────────────────────────────────────────────────────────
+
+function onSnapshot(msg) {
+  const gpus = msg.gpus || [];
+  const gpuSection = document.getElementById("gpu-section");
+  const gpuCards = document.getElementById("gpu-cards");
+  gpuCards.textContent = "";
+  if (gpus.length > 0) {
+    gpuSection.classList.remove("hidden");
+    gpus.forEach(g => gpuCards.appendChild(buildGPUCard(g)));
+  } else {
+    gpuSection.classList.add("hidden");
+  }
+
+  const backendCards = document.getElementById("backend-cards");
+  backendCards.textContent = "";
+  for (const [name, b] of Object.entries(msg.backends || {})) {
+    backendCards.appendChild(buildBackendCard(name, b));
+  }
+
+  renderLog();
+}
+
+// ── GPU cards ─────────────────────────────────────────────────────────────────
+
+function buildGPUCard(g) {
+  const card = div("card");
+  card.id = "gpu-" + g.index;
+
+  const header = div("card-header");
+  header.appendChild(span("card-name", g.name));
+  header.appendChild(span("card-sub", "GPU " + g.index));
+  card.appendChild(header);
+
+  const spacer = div("");
+  spacer.style.marginBottom = "6px";
+  card.appendChild(spacer);
+
+  card.appendChild(buildBarRow("Utilization", "g-util", "g-util-bar", g.busy_pct + "%", g.busy_pct, gpuFill(g.busy_pct)));
+  const vPct = g.vram_total > 0 ? (g.vram_used / g.vram_total * 100) : 0;
+  const vUsed = (g.vram_used / (1 << 30)).toFixed(1);
+  const vTotal = (g.vram_total / (1 << 30)).toFixed(1);
+  card.appendChild(buildBarRow("VRAM", "g-vram", "g-vram-bar", vUsed + " / " + vTotal + " GiB", vPct, vramFill(vPct)));
+
+  const mr = div("metrics-row");
+  mr.appendChild(buildMetric("Temp", "g-temp", g.temp_c.toFixed(1) + "\u00b0C", tempClass(g.temp_c)));
+  mr.appendChild(buildMetric("Power", "g-power", g.power_w.toFixed(1) + " W", ""));
+  card.appendChild(mr);
+
+  return card;
+}
+
+function onGPU(msg) {
+  for (const g of (msg.gpus || [])) {
+    const card = document.getElementById("gpu-" + g.index);
+    if (!card) continue;
+    const vPct = g.vram_total > 0 ? (g.vram_used / g.vram_total * 100) : 0;
+    const vUsed = (g.vram_used / (1 << 30)).toFixed(1);
+    const vTotal = (g.vram_total / (1 << 30)).toFixed(1);
+
+    updateBarRow(card, "g-util", "g-util-bar", g.busy_pct + "%", g.busy_pct, gpuFill(g.busy_pct));
+    updateBarRow(card, "g-vram", "g-vram-bar", vUsed + " / " + vTotal + " GiB", vPct, vramFill(vPct));
+
+    const temp = card.querySelector(".g-temp");
+    temp.textContent = g.temp_c.toFixed(1) + "\u00b0C";
+    temp.className = "metric-value g-temp " + tempClass(g.temp_c);
+    card.querySelector(".g-power").textContent = g.power_w.toFixed(1) + " W";
+  }
+}
+
+// ── Backend cards ─────────────────────────────────────────────────────────────
+
+function buildBackendCard(name, b) {
+  const status = b.status || "unhealthy";
+  const model = b.model || "";
+
+  const card = div("card");
+  card.id = "backend-" + name;
+
+  const header = div("card-header");
+  header.appendChild(span("card-name", name));
+  const badge = span("badge " + status + " b-badge", status);
+  header.appendChild(badge);
+  card.appendChild(header);
+
+  const modelSub = div("card-sub");
+  modelSub.title = model;
+  modelSub.textContent = model.length > 44 ? model.slice(0, 44) + "\u2026" : (model || "\u2014");
+  card.appendChild(modelSub);
+
+  const metaSub = div("card-sub");
+  metaSub.textContent = "pid " + (b.pid || "\u2014") + " \u00b7 port " + (b.port || "\u2014") + " \u00b7 up " + fmtUptime(b.uptime_sec) + " \u00b7 restarts " + (b.restarts || 0);
+  card.appendChild(metaSub);
+
+  card.appendChild(buildBarRow("KV Cache", "b-kv-pct", "b-kv-bar", "0%", 0, "kv"));
+
+  const mr = div("metrics-row");
+  mr.appendChild(buildMetric("Gen tok/s", "b-gen", "\u2014", ""));
+  mr.appendChild(buildMetric("Prompt tok/s", "b-prompt", "\u2014", ""));
+  mr.appendChild(buildMetric("Queue", "b-queue", "\u2014", ""));
+  card.appendChild(mr);
+
+  const slotsEl = div("slots");
+  slotsEl.id = "slots-" + name;
+  card.appendChild(slotsEl);
+
+  return card;
+}
+
+function onMetrics(msg) {
+  const card = document.getElementById("backend-" + msg.backend);
+  if (!card) return;
+  const kv = Math.min(msg.kv_cache_pct || 0, 100);
+  updateBarRow(card, "b-kv-pct", "b-kv-bar", kv.toFixed(1) + "%", kv, "kv");
+  card.querySelector(".b-gen").textContent = (msg.gen_tok_s || 0).toFixed(1);
+  card.querySelector(".b-prompt").textContent = (msg.prompt_tok_s || 0).toFixed(1);
+  card.querySelector(".b-queue").textContent = msg.queue_depth || 0;
+
+  const slotsEl = document.getElementById("slots-" + msg.backend);
+  if (!slotsEl) return;
+  slotsEl.textContent = "";
+  for (const s of (msg.slots || [])) {
+    const row = div("slot-row");
+    row.appendChild(span("slot-id", s.id));
+    row.appendChild(span("slot-state " + (s.state || "idle"), s.state || "idle"));
+    row.appendChild(span("slot-tokens", s.tokens + " tok"));
+    row.appendChild(span("slot-ctx", s.ctx_used + " ctx"));
+    slotsEl.appendChild(row);
+  }
+}
+
+function onState(msg) {
+  const card = document.getElementById("backend-" + msg.backend);
+  if (!card) return;
+  const status = msg.status || "unhealthy";
+  const badge = card.querySelector(".b-badge");
+  badge.textContent = status;
+  badge.className = "badge b-badge " + status;
+}
+
+// ── Request log ───────────────────────────────────────────────────────────────
+
+function onEvent(msg) {
+  if (msg.kind !== "prompt_eval" && msg.kind !== "gen_eval") return;
+  const now = new Date();
+  const ts = now.toTimeString().slice(0, 8);
+  logEntries.unshift({ ts, backend: msg.backend, slot: msg.slot, tokens: msg.tokens, toks: msg.tok_s || 0, kind: msg.kind });
+  if (logEntries.length > MAX_LOG) logEntries.length = MAX_LOG;
+  renderLog();
+}
+
+function renderLog() {
+  const el = document.getElementById("log-entries");
+  el.textContent = "";
+  if (logEntries.length === 0) {
+    const empty = div("log-empty");
+    empty.textContent = "no requests yet";
+    el.appendChild(empty);
+    return;
+  }
+  for (const e of logEntries) {
+    const row = div("log-row");
+    row.appendChild(span("log-time", e.ts));
+    row.appendChild(span("log-backend", e.backend + "/" + e.slot));
+    row.appendChild(span("log-tokens", e.tokens + " tok"));
+    row.appendChild(span("log-toks", e.toks.toFixed(1) + " t/s"));
+    row.appendChild(span("log-kind", e.kind));
+    el.appendChild(row);
+  }
+}
+
+// ── Bar helpers ───────────────────────────────────────────────────────────────
+
+function buildBarRow(label, valCls, barCls, valText, pct, fillCls) {
+  const row = div("bar-row");
+  const lbl = div("bar-label");
+  lbl.appendChild(span("", label));
+  lbl.appendChild(span(valCls, valText));
+  row.appendChild(lbl);
+  const track = div("bar-track");
+  const fill = div("bar-fill " + fillCls + " " + barCls);
+  fill.style.width = Math.min(pct, 100).toFixed(1) + "%";
+  track.appendChild(fill);
+  row.appendChild(track);
+  return row;
+}
+
+function updateBarRow(card, valCls, barCls, valText, pct, fillCls) {
+  const valEl = card.querySelector("." + valCls);
+  if (valEl) valEl.textContent = valText;
+  const barEl = card.querySelector("." + barCls);
+  if (barEl) {
+    barEl.style.width = Math.min(pct, 100).toFixed(1) + "%";
+    barEl.className = "bar-fill " + fillCls + " " + barCls;
+  }
+}
+
+function buildMetric(label, valCls, valText, extraCls) {
+  const m = div("metric");
+  const lbl = div("metric-label");
+  lbl.textContent = label;
+  const val = div("metric-value" + (extraCls ? " " + extraCls : "") + " " + valCls);
+  val.textContent = valText;
+  m.append(lbl, val);
+  return m;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtUptime(s) {
+  if (!s) return "\u2014";
+  if (s < 60) return s.toFixed(0) + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  return Math.floor(s / 3600) + "h" + String(Math.floor((s % 3600) / 60)).padStart(2, "0") + "m";
+}
+
+function gpuFill(pct)  { return pct > 90 ? "danger" : pct > 70 ? "warn" : "gpu"; }
+function vramFill(pct) { return pct > 90 ? "danger" : pct > 70 ? "warn" : "vram"; }
+function tempClass(c)  { return c > 85 ? "temp-hot" : c > 70 ? "temp-warn" : "temp-ok"; }
+
+connect();
+</script>
+</body>
+</html>

@@ -21,3 +21,4 @@ coverage.out
 
 # llama.cpp build artifacts
 /build/
+bin/
