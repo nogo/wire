@@ -31,9 +31,9 @@ func TestModelAliases(t *testing.T) {
 	aliases := modelAliases("Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M")
 	want := map[string]bool{
 		"Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M": true,
-		"Qwen3-Coder-30B-A3B-Instruct-GGUF":              true,
-		"Qwen3-Coder-30B-A3B-Instruct-Q4_K_M":            true,
-		"Qwen3-Coder-30B-A3B-Instruct":                   true,
+		"Qwen3-Coder-30B-A3B-Instruct-GGUF":             true,
+		"Qwen3-Coder-30B-A3B-Instruct-Q4_K_M":           true,
+		"Qwen3-Coder-30B-A3B-Instruct":                  true,
 	}
 	got := make(map[string]bool)
 	for _, a := range aliases {

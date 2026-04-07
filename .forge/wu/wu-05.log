@@ -1,0 +1,8 @@
+Everything is already implemented and all tests pass. Here's what's in place:
+
+- **`internal/anthropic/translate.go`** — `TranslateRequest` (OpenAI→Anthropic), `TranslateResponse` (Anthropic→OpenAI non-streaming), type definitions for both wire formats
+- **`internal/anthropic/sse.go`** — `parseSSE` for Anthropic event stream, `TranslateStream` for real-time Anthropic→OpenAI SSE conversion with per-event flushing
+- **`internal/anthropic/translate_test.go`** — tests covering basic requests, system message extraction, tool calls both directions, ID preservation, streaming, and edge cases
+- **`internal/gateway/gateway.go`** — `handleAnthropicProxy` uses `http.Client` directly (not `httputil.ReverseProxy`), sets `x-api-key`/`anthropic-version` headers, routes streaming vs non-streaming through the appropriate translator
+
+All requirements are met: `go build ./...` and `go test ./...` both pass cleanly.

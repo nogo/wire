@@ -172,3 +172,244 @@ model: sonnet
   ─────────────────────────────────────────────────────
   Finished: 2026-03-16 23:45:39  (6m 33s)
   Status:   ✓ OK
+  Commit:   ✓ abd56c7  wu-04: Add CLI commands
+  Changes:   11 files changed, 542 insertions(+), 62 deletions(-)
+  Moved:    → .forge/done/wu-04.md
+  ─────────────────────────────────────────────────────
+
+
+wu-05: Translate Anthropic API format
+model: sonnet
+
+  Prompt:  112 lines  (7360 bytes)
+  Log:     /home/nogo/Development/projects/inference/.forge/wu/wu-05.log
+
+  Started: 2026-03-16 23:45:39
+
+  [23:45:45]  ⚙  Agent  {"description":"Explore project and forge provider code","subagent_type":"Explor…
+  [23:45:47]  ⚙  Bash  {"command":"find /home/nogo/Development/projects/inference -type f -name \"*.go\…
+  [23:45:47]  ⚙  Bash  {"command":"ls -la /home/nogo/Development/projects/inference/","description":"Li…
+  [23:45:48]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/gateway/gateway…
+  [23:45:48]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/config/config.g…
+  [23:45:48]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:45:48]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:45:48]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/open…
+  [23:45:49]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/open…
+  [23:45:49]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/type…
+  [23:46:04]  💬 Let me read the actual file contents directly.
+  [23:46:05]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/gateway/gateway…
+  [23:46:05]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/config/config.g…
+  [23:46:05]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:46:08]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:46:08]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/open…
+  [23:46:08]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/go.mod"}
+  [23:46:11]  💬 Let me check the route table file to understand how the backend config is accessed:
+  [23:46:12]  ⚙  Glob  {"pattern":"**/*.go","path":"/home/nogo/Development/projects/inference/internal/…
+  [23:46:15]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/gateway/route.g…
+  [23:46:15]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/gateway/gateway…
+  [23:48:07]  💬 Let me check the process manager to understand how external backends work:
+  [23:48:07]  ⚙  Glob  {"pattern":"**/*.go","path":"/home/nogo/Development/projects/inference/internal/…
+  [23:48:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/inference/internal/process/manager…
+  [23:48:16]  💬 Now I have everything I need. Let me build the three files:
+  [23:48:16]  ⚙  ToolSearch  {"query":"select:TodoWrite","max_results":1}
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-07 23:24:58
+
+  Pre-flight verify...
+  Pre-flight: ✗ FAILED — project is not green before any WU ran
+
+verify: check (vet, fmt, tidy, test, lint)
+mise ERROR error parsing config file: ~/Development/projects/wire/mise.toml
+mise ERROR Config files in ~/Development/projects/wire/mise.toml are not trusted.
+Trust them with `mise trust`. See https://mise.jdx.dev/cli/trust.html for more information.
+mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
+
+  Fix the baseline, then restart the runner.
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-07 23:25:11
+
+  Pre-flight verify...
+  Pre-flight: ✗ FAILED — project is not green before any WU ran
+
+verify: check (vet, fmt, tidy, test, lint)
+[test] $ go test -race -count=1 ./...
+[tidy] $ go mod tidy
+[vet] $ go vet ./...
+[fmt:check] $ UNFORMATTED=$(gofmt -l .)
+[lint] $ if command -v staticcheck >/dev/null 2>&1; then
+[lint] staticcheck not installed, skipping
+[lint] Finished in 6.0ms
+[fmt:check] FAIL: unformatted files:
+[fmt:check] internal/gateway/gateway_test.go
+[tidy] Finished in 51.5ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[vet] Finished in 2.04s
+[test] ok  	github.com/nogo/wire/internal/cli	1.015s
+[test] ok  	github.com/nogo/wire/internal/config	1.019s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.024s
+[test] ok  	github.com/nogo/wire/internal/process	7.242s
+[test] Finished in 8.86s
+Finished in 8.87s
+[fmt:check] ERROR task failed
+
+  Fix the baseline, then restart the runner.
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-07 23:28:13
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-05: Translate Anthropic API format
+model: sonnet
+
+  Prompt:  112 lines  (7360 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-05.log
+
+  Started: 2026-04-07 23:28:21
+
+  [23:28:26]  ⚙  Glob  {"pattern":"**/*.go"}
+  [23:28:27]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:28:29]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:28:29]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [23:28:32]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [23:28:32]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway_test…
+  [23:28:35]  💬 Now let me check the forge OpenAI code and the go.mod for module details:
+  [23:28:36]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:28:37]  ⚙  Bash  {"command":"cat /home/nogo/Development/projects/wire/go.mod","description":"Read…
+  [23:30:50]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [23:37:55]  💬 Now I have enough context. Let me implement the Anthropic translation layer.
+  [23:37:55]  ⚙  ToolSearch  {"query":"select:TodoWrite","max_results":1}
+  [23:38:00]  ⚙  TodoWrite  {"todos":[{"content":"Create internal/anthropic/translate.go","activeForm":"Crea…
+  [23:38:37]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/anthropic/translate.…
+  [23:38:41]  ⚙  TodoWrite  {"todos":[{"content":"Create internal/anthropic/translate.go","activeForm":"Crea…
+  [23:39:09]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/anthropic/sse.go","c…
+  [23:39:12]  ⚙  TodoWrite  {"todos":[{"content":"Create internal/anthropic/translate.go","activeForm":"Crea…
+  [23:40:26]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/anthropic/translate_…
+  [23:40:30]  ⚙  TodoWrite  {"todos":[{"content":"Create internal/anthropic/translate.go","activeForm":"Crea…
+  [23:40:32]  💬 Now modify the gateway to intercept Anthropic backends:
+  [23:40:35]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [23:40:40]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [23:40:42]  💬 Now add the `handleAnthropicProxy` method before `handleModels`:
+  [23:40:54]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [23:40:57]  ⚙  TodoWrite  {"todos":[{"content":"Create internal/anthropic/translate.go","activeForm":"Crea…
+  [23:40:59]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [23:41:02]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [23:41:05]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages in wire proje…
+  [23:41:08]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build wire project"}
+  [23:41:10]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build wire project","dangerously…
+  [23:41:13]  ⚙  Bash  {"command":"go build ./... 2>&1; echo \"exit: $?\"","description":"Build wire pr…
+  [23:41:15]  💬 Build clean. Now run tests:
+  [23:41:15]  ⚙  Bash  {"command":"go test ./... 2>&1; echo \"exit: $?\"","description":"Run all tests"…
+  [23:41:21]  💬 All tests pass.
+  [23:41:23]  ⚙  TodoWrite  {"todos":[{"content":"Create internal/anthropic/translate.go","activeForm":"Crea…
+  [23:41:33]  💬 All done. Here's what was built:
+
+**`internal/anthropic/translate.go`** — request and response translation:
+- `Translate
+
+  [23:41:33]  ✅ Done — tokens: 32 in / 57181 out | cost: $1.6833341999999998
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-07 23:41:34  (13m 13s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✗ FAILED
+[tidy] $ go mod tidy
+[vet] $ go vet ./...
+[fmt:check] $ UNFORMATTED=$(gofmt -l .)
+[lint] $ if command -v staticcheck >/dev/null 2>&1; then
+[lint] staticcheck not installed, skipping
+[lint] Finished in 5.6ms
+[fmt:check] FAIL: unformatted files:
+[fmt:check] internal/anthropic/sse.go
+[fmt:check] internal/anthropic/translate.go
+[tidy] Finished in 59.1ms
+[vet] Finished in 477.6ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[test] ok  	github.com/nogo/wire/internal/anthropic	1.020s
+[test] ok  	github.com/nogo/wire/internal/cli	1.015s
+[test] ok  	github.com/nogo/wire/internal/config	1.017s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.026s
+[test] ok  	github.com/nogo/wire/internal/process	7.241s
+[test] Finished in 8.65s
+Finished in 8.67s
+[fmt:check] ERROR task failed
+
+  ⚠ /home/nogo/Development/projects/wire/.forge/wu/wu-05.md failed — pausing. Fix and restart, or Ctrl-C to stop.
+
+  ⏹ Ctrl-C received, finishing current work...
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-07 23:43:11
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-05: Translate Anthropic API format
+model: sonnet
+
+  Prompt:  112 lines  (7360 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-05.log
+
+  Started: 2026-04-07 23:43:19
+
+  [23:43:26]  ⚙  Agent  {"description":"Explore codebase and forge provider code","subagent_type":"Explo…
+  [23:43:28]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [23:43:28]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [23:43:28]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:43:28]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:43:29]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/open…
+  [23:43:29]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/type…
+  [23:44:26]  💬 Let me read the actual file contents directly.
+  [23:44:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [23:44:27]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [23:44:27]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:44:31]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/anth…
+  [23:44:31]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/forge/delta/internal/provider/open…
+  [23:44:31]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/wire/internal/anthropic/**"}
+  [23:44:34]  💬 The gateway already has the integration code and the `internal/anthropic` package exists. Let me read those files.
+  [23:44:35]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/anthropic/translate.…
+  [23:44:35]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/anthropic/sse.go"}
+  [23:44:35]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/anthropic/translate_…
+  [23:44:38]  💬 All files are already implemented. Let me run the tests to verify everything passes.
+  [23:44:39]  ⚙  Bash  {"command":"go build ./... 2>&1 && go test ./... 2>&1","description":"Build and …
+  [23:44:47]  💬 Everything is already implemented and all tests pass. Here's what's in place:
+
+- **`internal/anthropic/translate.go`** —
+
+  [23:44:47]  ✅ Done — tokens: 8 in / 1421 out | cost: $0.3078323
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-07 23:44:47  (1m 28s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✓ all green

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Project-specific verification. Called by the runner after each WU.
+# Exit 0 = green. Non-zero = broken.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "verify: check (vet, fmt, tidy, test, lint)"
+mise run check 2>&1
+
+echo "verify: all green"

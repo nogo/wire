@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nogo/wire/internal/anthropic"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/process"
 )
@@ -114,6 +115,12 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	backend := g.cfg.Backends[backendName]
+	if backend.Provider == "anthropic" {
+		g.handleAnthropicProxy(w, r, backendName, backend, addr)
+		return
+	}
+
 	target, parseErr := url.Parse(addr)
 	if parseErr != nil {
 		writeError(w, http.StatusInternalServerError, "server_error", "invalid backend URL", "internal_error")
@@ -143,6 +150,77 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy.ServeHTTP(w, r)
+}
+
+// handleAnthropicProxy translates the OpenAI-format request to Anthropic Messages API format,
+// proxies it directly (without httputil.ReverseProxy), and translates the response back.
+func (g *Gateway) handleAnthropicProxy(w http.ResponseWriter, r *http.Request, backendName string, backend config.Backend, addr string) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", "failed to read body", "bad_request")
+		return
+	}
+
+	// Determine whether the client wants a streaming response.
+	var meta struct {
+		Stream bool `json:"stream"`
+	}
+	json.Unmarshal(body, &meta) //nolint:errcheck
+
+	// model is either the configured model name (managed) or the backend name (external).
+	model := backend.Model
+	if model == "" {
+		model = backendName
+	}
+
+	antBody, err := anthropic.TranslateRequest(body, model)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", "translation failed: "+err.Error(), "bad_request")
+		return
+	}
+
+	antURL := strings.TrimRight(addr, "/") + "/v1/messages"
+	antReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, antURL, bytes.NewReader(antBody))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "failed to build upstream request", "internal_error")
+		return
+	}
+	antReq.Header.Set("content-type", "application/json")
+	antReq.Header.Set("x-api-key", backend.APIKey)
+	antReq.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(antReq)
+	if err != nil {
+		g.log.Error("anthropic upstream error", "backend", backendName, "error", err)
+		writeError(w, http.StatusBadGateway, "server_error", "upstream error: "+err.Error(), "upstream_error")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode/100 != 2 {
+		var buf bytes.Buffer
+		buf.ReadFrom(resp.Body) //nolint:errcheck
+		writeError(w, resp.StatusCode, "server_error", "upstream: "+strings.TrimSpace(buf.String()), "upstream_error")
+		return
+	}
+
+	if meta.Stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		anthropic.TranslateStream(resp.Body, w, backendName)
+		return
+	}
+
+	var buf bytes.Buffer
+	buf.ReadFrom(resp.Body) //nolint:errcheck
+	translated, err := anthropic.TranslateResponse(buf.Bytes(), backendName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "response translation failed: "+err.Error(), "internal_error")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(translated) //nolint:errcheck
 }
 
 // handleModels merges GET /v1/models from all backends and rewrites model IDs to backend names.
