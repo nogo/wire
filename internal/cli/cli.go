@@ -16,8 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"flag"
+
 	"gopkg.in/yaml.v3"
 
+	"github.com/nogo/wire/internal/build"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/gateway"
 	"github.com/nogo/wire/internal/process"
@@ -30,9 +33,14 @@ Commands:
   stop                Stop the running gateway
   status              Show backend status
   swap <backend> <model>  Hot-swap a backend's model
+  build               Build and install llama-server from source (ROCm)
+  remove              Remove a previous llama-server installation
 
 Environment:
   WIRE_CONFIG         Config file path (default: ~/.config/wire/config.yaml)
+  WIRE_LLAMA_SRC      llama.cpp source directory (default: ~/Development/llama.cpp)
+  WIRE_GPU_TARGET     AMD GPU target (default: gfx1151; find yours: rocminfo | grep gfx)
+  WIRE_PREFIX         Install prefix (default: ~/.local)
 `
 
 // Run dispatches CLI commands from the given argument slice (os.Args[1:]).
@@ -65,6 +73,10 @@ func dispatch(args []string) error {
 			return fmt.Errorf("swap requires <backend> and <model>\nUsage: wire swap <backend> <model>")
 		}
 		return runSwap(args[1], args[2])
+	case "build":
+		return runBuild(args[1:])
+	case "remove":
+		return runRemove(args[1:])
 	default:
 		fmt.Print(usageText)
 		return fmt.Errorf("unknown command: %q", args[0])
@@ -386,4 +398,36 @@ func runSwap(backend, model string) error {
 
 	fmt.Printf("sent reload signal to wire (pid %d); run 'wire status' to check progress\n", pid)
 	return nil
+}
+
+func runBuild(args []string) error {
+	opts, err := build.DefaultOptions()
+	if err != nil {
+		return err
+	}
+
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	fs.StringVar(&opts.Source, "source", opts.Source, "path to llama.cpp git checkout")
+	fs.StringVar(&opts.GPUTarget, "gpu-target", opts.GPUTarget, "AMD GPU target (find yours: rocminfo | grep gfx)")
+	fs.StringVar(&opts.Prefix, "prefix", opts.Prefix, "install prefix")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	return build.Build(opts)
+}
+
+func runRemove(args []string) error {
+	opts, err := build.DefaultOptions()
+	if err != nil {
+		return err
+	}
+
+	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
+	fs.StringVar(&opts.Source, "source", opts.Source, "path to llama.cpp git checkout")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	return build.Remove(opts)
 }

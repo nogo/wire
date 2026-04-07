@@ -1,0 +1,13 @@
+[Unit]
+Description=Wire inference gateway
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wire start
+Restart=on-failure
+RestartSec=5
+Environment=WIRE_CONFIG=%h/.config/wire/config.yaml
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,9 @@
+Both pass. Here's what was created/modified:
+
+**Created:**
+- `internal/build/build.go` — `Build(opts)` and `Remove(opts)`. Fetches latest tag, checks out if needed, removes previous install via manifest, runs cmake configure/build/install with streaming output. `DefaultOptions()` reads `WIRE_LLAMA_SRC`, `WIRE_GPU_TARGET`, `WIRE_PREFIX`.
+- `deploy/wire.service` — systemd user service, `ExecStart=%h/.local/bin/wire start`, `Restart=on-failure`.
+- `Makefile` — `build`, `install`, `uninstall`, `test` targets. `make install` prints linger/enable instructions.
+
+**Modified:**
+- `internal/cli/cli.go` — added `build` and `remove` subcommands with `flag.NewFlagSet` parsing for `--source`, `--gpu-target`, `--prefix`.
