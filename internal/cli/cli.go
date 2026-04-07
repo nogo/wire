@@ -15,6 +15,7 @@ import (
 
 	"flag"
 
+	"github.com/nogo/wire/internal"
 	"github.com/nogo/wire/internal/build"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/gateway"
@@ -31,6 +32,7 @@ Commands:
   swap <backend> <model>  Hot-swap a backend's model
   build               Build and install llama-server from source (ROCm)
   remove              Remove a previous llama-server installation
+  version             Print version and exit
 
 Environment:
   WIRE_CONFIG         Config file path (default: ~/.config/wire/config.yaml)
@@ -69,6 +71,9 @@ func dispatch(args []string) error {
 			return fmt.Errorf("swap requires <backend> and <model>\nUsage: wire swap <backend> <model>")
 		}
 		return runSwap(args[1], args[2])
+	case "version", "--version", "-v":
+		fmt.Printf("wire %s (%s) built %s\n", internal.Version, internal.Commit, internal.BuildDate)
+		return nil
 	case "build":
 		return runBuild(args[1:])
 	case "remove":
@@ -121,7 +126,7 @@ func runStart() error {
 	gwErrCh := make(chan error, 1)
 	go func() { gwErrCh <- gw.ListenAndServe(shutCtx) }()
 
-	slog.Info("wire ready", "listen", cfg.Listen)
+	slog.Info("wire ready", "listen", cfg.Listen, "version", internal.Version, "commit", internal.Commit)
 
 	// swapMu serialises SIGHUP handling so overlapping reloads are dropped.
 	var swapMu sync.Mutex

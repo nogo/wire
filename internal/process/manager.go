@@ -1,7 +1,6 @@
 package process
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/monitor"
 )
 
 type swapRequest struct {
@@ -24,12 +24,14 @@ type swapRequest struct {
 }
 
 type procState struct {
-	mu      sync.Mutex
-	backend config.Backend
-	port    int
-	proc    *os.Process
-	healthy bool
-	swapCh  chan swapRequest
+	mu        sync.Mutex
+	backend   config.Backend
+	port      int
+	proc      *os.Process
+	healthy   bool
+	swapCh    chan swapRequest
+	startedAt time.Time
+	restarts  int
 }
 
 // Manager supervises llama-server child processes for managed backends and
@@ -39,10 +41,11 @@ type Manager struct {
 	log        *slog.Logger
 	cmdBuilder func(ctx context.Context, b config.Backend, port int) *exec.Cmd
 
-	mu     sync.RWMutex
-	procs  map[string]*procState
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	mu      sync.RWMutex
+	procs   map[string]*procState
+	wg      sync.WaitGroup
+	cancel  context.CancelFunc
+	eventCh chan monitor.ServerEvent
 }
 
 // New creates a Manager. It does not start any processes; call Start.
@@ -51,10 +54,46 @@ func New(cfg *config.Config, log *slog.Logger) *Manager {
 	m.cfg = cfg
 	m.log = log
 	m.procs = make(map[string]*procState)
+	m.eventCh = make(chan monitor.ServerEvent, 256)
 	m.cmdBuilder = func(ctx context.Context, b config.Backend, port int) *exec.Cmd {
 		return exec.CommandContext(ctx, "llama-server", buildArgs(b, port)...)
 	}
 	return m
+}
+
+// Events returns a receive-only channel of structured events from all managed
+// backends. The channel is buffered (256); sends are non-blocking and events
+// are dropped when the channel is full.
+func (m *Manager) Events() <-chan monitor.ServerEvent {
+	return m.eventCh
+}
+
+// Snapshot returns a point-in-time copy of the runtime state of all managed
+// backends. It acquires read locks and is safe to call concurrently.
+func (m *Manager) Snapshot() []monitor.BackendStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]monitor.BackendStatus, 0, len(m.procs))
+	for name, ps := range m.procs {
+		ps.mu.Lock()
+		pid := 0
+		if ps.proc != nil {
+			pid = ps.proc.Pid
+		}
+		status := monitor.BackendStatus{
+			Name:      name,
+			Model:     ps.backend.Model,
+			Port:      ps.port,
+			PID:       pid,
+			Healthy:   ps.healthy,
+			StartedAt: ps.startedAt,
+			Restarts:  ps.restarts,
+		}
+		ps.mu.Unlock()
+		result = append(result, status)
+	}
+	return result
 }
 
 // Start launches supervisor goroutines for all managed backends.
@@ -193,6 +232,7 @@ func (m *Manager) supervise(ctx context.Context, name string) {
 	var (
 		attempts    int
 		windowStart = time.Now()
+		launched    bool // false on the very first launch
 	)
 
 	for {
@@ -234,7 +274,12 @@ func (m *Manager) supervise(ctx context.Context, name string) {
 		ps.port = port
 		ps.healthy = false
 		backend := ps.backend
+		if launched {
+			ps.restarts++
+		}
+		ps.startedAt = time.Now()
 		ps.mu.Unlock()
+		launched = true
 
 		cmd, err := m.launch(ctx, name, backend, port)
 		if err != nil {
@@ -299,6 +344,8 @@ func (m *Manager) supervise(ctx context.Context, name string) {
 
 				ps.mu.Lock()
 				ps.port = newPort
+				ps.restarts++
+				ps.startedAt = time.Now()
 				ps.mu.Unlock()
 
 				newCmd, launchErr := m.launch(ctx, name, backend, newPort)
@@ -367,38 +414,14 @@ func (m *Manager) launch(ctx context.Context, name string, b config.Backend, por
 	}
 	cmd.WaitDelay = 10 * time.Second
 
-	cmd.Stdout = &lineLogger{log: m.log, name: name}
-	cmd.Stderr = &lineLogger{log: m.log, name: name}
+	parser := monitor.NewEventParser(m.log, name, m.eventCh)
+	cmd.Stdout = parser
+	cmd.Stderr = parser
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 	return cmd, nil
-}
-
-// lineLogger buffers subprocess output and emits each complete line as a slog
-// debug record. It is called from cmd's internal I/O goroutine — no locking needed.
-type lineLogger struct {
-	log  *slog.Logger
-	name string
-	buf  bytes.Buffer
-}
-
-func (l *lineLogger) Write(p []byte) (int, error) {
-	l.buf.Write(p)
-	for {
-		b := l.buf.Bytes()
-		idx := bytes.IndexByte(b, '\n')
-		if idx < 0 {
-			break
-		}
-		line := string(b[:idx])
-		l.buf.Next(idx + 1)
-		if len(line) > 0 {
-			l.log.Debug(line, "backend", l.name)
-		}
-	}
-	return len(p), nil
 }
 
 // buildArgs constructs the llama-server command-line arguments from a Backend config.

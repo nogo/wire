@@ -1,0 +1,8 @@
+`go build ./...` and `go test ./...` both pass. All files were already implemented:
+
+- `internal/monitor/event.go` — `ServerEvent`, `EventKind`, `BackendStatus`
+- `internal/monitor/parser.go` — `eventParser` with compiled regexes, non-blocking channel sends, slog passthrough
+- `internal/monitor/metrics.go` — Prometheus gauge parser, `Slot`/`ParseSlots`
+- `internal/monitor/gpu.go` — `DiscoverGPUs`, `ReadGPUMetrics`, hwmon re-glob on stale path
+- `internal/monitor/hub.go` — poll loop (1s), fan-out to buffered subscriber channels, `Stop()` closes all channels
+- `internal/process/manager.go` — `eventParser` wired in `launch()`, `Snapshot()`/`Events()` methods, `startedAt`/`restarts` in `procState`

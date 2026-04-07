@@ -456,3 +456,211 @@ model: sonnet
 
   Running full test suite...
   Tests:    ✓ all green
+  Commit:   ✓ ff59c14  wu-06: Add build script and systemd service
+  Changes:   11 files changed, 175 insertions(+)
+  Moved:    → .forge/done/wu-06.md
+  ─────────────────────────────────────────────────────
+
+
+wu-07: Parse llama-server events and collect metrics
+model: sonnet
+
+  Prompt:  202 lines  (13550 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-07.log
+
+  Started: 2026-04-07 23:46:17
+
+  [23:46:24]  ⚙  Agent  {"description":"Explore codebase structure","subagent_type":"Explore","prompt":"…
+  [23:46:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/go.mod"}
+  [23:46:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [23:46:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [23:46:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager_test…
+  [23:46:26]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/wire/internal/monitor/**"}
+  [23:46:43]  💬 Let me read the exact file contents I need to modify and reference.
+  [23:46:43]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [23:46:43]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [23:46:44]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager_test…
+
+  ⏹ Ctrl-C received, finishing current work...
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-07 23:47:58  (1m 41s)
+  Status:   ✗ FAILED (exit 130)
+  ─────────────────────────────────────────────────────
+
+  ⚠ /home/nogo/Development/projects/wire/.forge/wu/wu-07.md failed — pausing. Fix and restart, or Ctrl-C to stop.
+
+  ═══════════════════════════════════════════════════════
+  Runner stopped: 2 done, 1 failed, 3 remaining
+  ═══════════════════════════════════════════════════════
+
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-07 23:57:07
+
+  Pre-flight verify...
+  Pre-flight: ✗ FAILED — project is not green before any WU ran
+
+[fmt:check] $ UNFORMATTED=$(gofmt -l .)
+[vet] $ go vet ./...
+[lint] $ if command -v staticcheck >/dev/null 2>&1; then
+[lint] staticcheck not installed, skipping
+[lint] Finished in 7.2ms
+[fmt:check] FAIL: unformatted files:
+[fmt:check] internal/gateway/gateway.go
+[tidy] Finished in 51.4ms
+[vet] Finished in 565.6ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[test] ?   	github.com/nogo/wire/internal/build	[no test files]
+[test] ok  	github.com/nogo/wire/internal/cli	1.019s
+[test] ok  	github.com/nogo/wire/internal/config	1.022s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.030s
+[test] ?   	github.com/nogo/wire/internal/pidfile	[no test files]
+[test] ok  	github.com/nogo/wire/internal/process	7.244s
+[test] ok  	github.com/nogo/wire/internal/translate/anthropic	1.028s
+[test] Finished in 8.72s
+Finished in 8.74s
+[fmt:check] ERROR task failed
+
+  Fix the baseline, then restart the runner.
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-07 23:57:38
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-07: Parse llama-server events and collect metrics
+model: sonnet
+
+  Prompt:  202 lines  (13550 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-07.log
+
+  Started: 2026-04-07 23:57:47
+
+  [23:57:55]  ⚙  Agent  {"description":"Explore codebase structure","subagent_type":"Explore","prompt":"…
+  [23:57:56]  ⚙  Bash  {"command":"find /home/nogo/Development/projects/wire -type f -name \"*.go\" | h…
+  [23:57:58]  ⚙  Bash  {"command":"find . -type d | head -30"}
+  [23:57:59]  ⚙  Bash  {"command":"tree -L 3 -I '.git|.forge' /home/nogo/Development/projects/wire 2>/d…
+  [23:58:00]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/go.mod"}
+  [23:58:01]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [23:58:01]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [23:58:01]  ⚙  Bash  {"command":"ls -la /home/nogo/Development/projects/wire/internal/monitor/ 2>&1"}
+  [23:58:03]  ⚙  Bash  {"command":"find /home/nogo/Development/projects/wire -not -path '*/.*' -type f …
+  [23:58:20]  💬 Now let me read the actual files before implementing:
+  [23:58:21]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [23:58:21]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager_test…
+  [23:58:21]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [00:05:39]  💬 Now I have a clear picture of the codebase. Let me implement everything in parallel:
+  [00:05:45]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/event.go","c…
+  [00:06:02]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/parser.go","…
+  [00:06:29]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/parser_test.…
+  [00:06:39]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/metrics.go",…
+  [00:06:55]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/metrics_test…
+  [00:07:17]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu.go","con…
+  [00:07:47]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu_test.go"…
+  [00:07:54]  💬 The GPU test file has a broken `strconv` helper that shadows the stdlib. Let me rewrite it:
+  [00:08:19]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu_test.go"…
+  [00:08:54]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go","con…
+  [00:09:19]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub_test.go"…
+  [00:09:22]  💬 The hub test uses `fmt.Sscanf` without importing `fmt`. Let me fix:
+  [00:09:23]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:09:27]  💬 Now modify `manager.go` to replace `lineLogger` with `eventParser`, add `startedAt`/`restarts` to `procState`, and add `
+  [00:09:29]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:09:33]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:09:39]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:09:48]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:09:51]  💬 Now update `supervise()` to set `startedAt` and increment `restarts`, and update `launch()` to use `eventParser`:
+  [00:09:59]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:10:01]  💬 Now update the swap case inside the monitor loop to also set `startedAt` and increment `restarts`:
+  [00:10:03]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:10:05]  💬 Now replace `lineLogger` with `eventParser` in `launch()` and remove the `lineLogger` type:
+  [00:10:07]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:10:13]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [00:10:15]  💬 Now let's build and test:
+  [00:10:15]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [00:10:17]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go","limit":…
+  [00:10:19]  ⚙  Bash  {"command":"grep -n '\"github.com/nogo/wire/internal\"' /home/nogo/Development/p…
+  [00:10:21]  ⚙  Bash  {"command":"grep -n 'internal\\.' /home/nogo/Development/projects/wire/internal/…
+  [00:10:30]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/wire/internal/*.go"}
+  [00:10:33]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/version.go"}
+  [00:10:37]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go","limit":…
+  [00:10:51]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/build/build.go","lim…
+  [00:10:53]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go","limit":…
+  [00:11:27]  💬 The `cli.go` import issue was pre-existing. Let me check what's happening:
+  [00:11:28]  ⚙  Bash  {"command":"git stash && go build ./... 2>&1; git stash pop","description":"Chec…
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 00:12:47
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-07: Parse llama-server events and collect metrics
+model: sonnet
+
+  Prompt:  202 lines  (13550 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-07.log
+
+  Started: 2026-04-08 00:12:55
+
+  [00:13:04]  ⚙  Agent  {"description":"Explore codebase structure","subagent_type":"Explore","prompt":"…
+  [00:13:08]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [00:13:08]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [00:13:08]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/go.mod"}
+  [00:13:09]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/wire/internal/monitor/*"}
+  [00:13:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/event.go"}
+  [00:13:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/parser.go"}
+  [00:13:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/metrics.go"}
+  [00:13:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [00:13:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu.go"}
+  [00:13:37]  💬 Let me read the actual file contents directly.
+  [00:13:37]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [00:13:37]  ⚙  Glob  {"pattern":"/home/nogo/Development/projects/wire/internal/monitor/*"}
+  [00:13:41]  💬 All files already exist. Let me read them to check their state.
+  [00:13:42]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/event.go"}
+  [00:13:42]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/parser.go"}
+  [00:13:42]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/metrics.go"}
+  [00:13:47]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [00:13:47]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu.go"}
+  [00:13:52]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/parser_test.…
+  [00:13:52]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu_test.go"…
+  [00:13:53]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/metrics_test…
+  [00:13:53]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub_test.go"…
+  [00:13:57]  💬 All files are already written. Let me run the build and tests.
+  [00:13:58]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [00:14:02]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [00:14:05]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages in wire repo"…
+  [00:14:11]  ⚙  Bash  {"command":"go build ./... 2>&1; echo \"exit: $?\"","description":"Build all pac…
+  [00:14:39]  ⚙  Bash  {"command":"go test ./... 2>&1; echo \"exit: $?\"","description":"Run all tests"…
+  [00:14:48]  💬 `go build ./...` and `go test ./...` both pass. All files were already implemented:
+
+- `internal/monitor/event.go` — `Se
+
+  [00:14:48]  ✅ Done — tokens: 122 in / 1842 out | cost: $0.33451965
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 00:14:48  (1m 53s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✓ all green
