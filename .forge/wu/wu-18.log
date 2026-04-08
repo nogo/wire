@@ -1,0 +1,14 @@
+All checks pass. Here's a summary of what was done:
+
+**`internal/process/manager.go`** — added `SetCmdBuilder` method (4 lines), the only way to inject a mock launcher from an external test package.
+
+**`internal/integration_test.go`** — 4 integration tests in `package internal_test`:
+
+| Test | What it proves |
+|---|---|
+| `TestHotReload_ParamChangeTriggersRestart` | Changed params (4096→8192 context) drain the old process and start a new one at a different port |
+| `TestHotReload_UnchangedConfigIsNoop` | Identical params → same port after Reload (process not restarted) |
+| `TestHotReload_InvalidConfigDiscarded` | Watch silently drops invalid YAML, then delivers the next valid config |
+| `TestHotReload_GatewayRoutesAfterUpdate` | Real HTTP requests: model-b returns 404 before `UpdateConfig`, non-404 after |
+
+The subprocess trick (`TestHotReload_HelperProcess` + `integrationCmdBuilder`) mirrors the pattern in `process/manager_test.go` — the test binary runs itself as a fake llama-server that prints the listening port and responds to `/health` with 200.

@@ -98,6 +98,12 @@ func New(cfg *config.Config, log *slog.Logger) *Manager {
 	return m
 }
 
+// SetCmdBuilder replaces the default llama-server launcher. Used in tests to
+// inject a fake process builder without starting real llama-server instances.
+func (m *Manager) SetCmdBuilder(fn func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd) {
+	m.cmdBuilder = fn
+}
+
 // Events returns a receive-only channel of structured events from all managed processes.
 func (m *Manager) Events() <-chan monitor.ServerEvent {
 	return m.eventCh
