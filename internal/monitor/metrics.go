@@ -46,17 +46,51 @@ const (
 
 // Slot is one element from the GET /slots JSON response.
 type Slot struct {
-	ID              int       `json:"id"`
-	State           SlotState `json:"state"`
+	ID              int       `json:"-"`
+	State           SlotState `json:"-"`
 	NCtx            int       `json:"n_ctx"`
 	NPredict        int       `json:"n_predict"`
 	Prompt          string    `json:"prompt"`
-	TokensPredicted int       `json:"tokens_predicted"`
-	TokensEvaluated int       `json:"tokens_evaluated"`
+	TokensPredicted int       `json:"-"`
+	TokensEvaluated int       `json:"-"`
+}
+
+// slotJSON is the raw JSON shape from llama-server /slots.
+// The format changed: state (int) → is_processing (bool),
+// tokens_predicted/tokens_evaluated → next_token[].n_decoded.
+type slotJSON struct {
+	ID           int  `json:"id"`
+	NCtx         int  `json:"n_ctx"`
+	IsProcessing bool `json:"is_processing"`
+
+	// New format: n_decoded lives inside next_token array.
+	NextToken []struct {
+		NDecoded int `json:"n_decoded"`
+	} `json:"next_token"`
 }
 
 // ParseSlots decodes a /slots JSON response.
 func ParseSlots(data []byte) ([]Slot, error) {
-	var slots []Slot
-	return slots, json.Unmarshal(data, &slots)
+	var raw []slotJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	slots := make([]Slot, len(raw))
+	for i, r := range raw {
+		state := SlotIdle
+		if r.IsProcessing {
+			state = SlotProcessing
+		}
+		decoded := 0
+		if len(r.NextToken) > 0 {
+			decoded = r.NextToken[0].NDecoded
+		}
+		slots[i] = Slot{
+			ID:              r.ID,
+			State:           state,
+			NCtx:            r.NCtx,
+			TokensPredicted: decoded,
+		}
+	}
+	return slots, nil
 }

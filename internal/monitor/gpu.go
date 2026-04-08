@@ -18,13 +18,13 @@ type GPUInfo struct {
 
 // GPUMetrics is a point-in-time hardware telemetry snapshot.
 type GPUMetrics struct {
-	Index     int
-	Name      string
-	BusyPct   int     // 0–100, from gpu_busy_percent
-	VRAMTotal uint64  // bytes, from mem_info_vram_total
-	VRAMUsed  uint64  // bytes, from mem_info_vram_used
-	TempC     float64 // °C, from temp1_input / 1000
-	PowerW    float64 // W, from power1_average / 1_000_000
+	Index     int     `json:"index"`
+	Name      string  `json:"name"`
+	BusyPct   int     `json:"busy_pct"`   // 0–100, from gpu_busy_percent
+	VRAMTotal uint64  `json:"vram_total"` // bytes, from mem_info_vram_total
+	VRAMUsed  uint64  `json:"vram_used"`  // bytes, from mem_info_vram_used
+	TempC     float64 `json:"temp_c"`     // °C, from temp1_input / 1000
+	PowerW    float64 `json:"power_w"`    // W, from power1_average / 1_000_000
 }
 
 // DiscoverGPUs finds all AMD GPUs exposed via the standard sysfs DRM tree.

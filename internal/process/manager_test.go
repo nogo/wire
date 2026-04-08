@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -79,8 +80,18 @@ func TestHelperProcess(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	srv := &http.Server{Addr: ":" + port, Handler: mux}
-	go srv.ListenAndServe() //nolint:errcheck
+	// Use port 0 to let the OS pick a free port, then print the listening
+	// line that wire's event parser expects.
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "listen: %v\n", err)
+		os.Exit(2)
+	}
+	actualPort := listener.Addr().(*net.TCPAddr).Port
+	fmt.Fprintf(os.Stdout, "main: server is listening on http://127.0.0.1:%d\n", actualPort)
+
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(listener) //nolint:errcheck
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -94,10 +105,10 @@ func TestHelperProcess(t *testing.T) {
 
 // testCmdBuilder returns a cmdBuilder that runs the test binary as a fake
 // llama-server subprocess.
-func testCmdBuilder(ctx context.Context, modelName string, params config.ModelParams, port int) *exec.Cmd {
+func testCmdBuilder(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
 	args := append(
 		[]string{"-test.run=TestHelperProcess", "--", "llama-server"},
-		buildArgs(modelName, params, port)...,
+		buildArgs(modelName, params)...,
 	)
 	cmd := exec.CommandContext(ctx, os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
@@ -107,11 +118,11 @@ func testCmdBuilder(ctx context.Context, modelName string, params config.ModelPa
 // testCmdBuilderWithDelay is like testCmdBuilder but the health endpoint
 // sleeps for delayMs milliseconds before responding 200. Used to exercise
 // the "concurrent requests coalesce" and "context cancellation" scenarios.
-func testCmdBuilderWithDelay(delayMs int) func(context.Context, string, config.ModelParams, int) *exec.Cmd {
-	return func(ctx context.Context, modelName string, params config.ModelParams, port int) *exec.Cmd {
+func testCmdBuilderWithDelay(delayMs int) func(context.Context, string, config.ModelParams) *exec.Cmd {
+	return func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
 		args := append(
 			[]string{"-test.run=TestHelperProcess", "--", "llama-server"},
-			buildArgs(modelName, params, port)...,
+			buildArgs(modelName, params)...,
 		)
 		args = append(args, fmt.Sprintf("--health-delay-ms=%d", delayMs))
 		cmd := exec.CommandContext(ctx, os.Args[0], args...)
@@ -122,10 +133,10 @@ func testCmdBuilderWithDelay(delayMs int) func(context.Context, string, config.M
 
 // failCmdBuilder returns a cmdBuilder whose process always exits immediately
 // without starting an HTTP server — simulating a model that fails to load.
-func failCmdBuilder(ctx context.Context, modelName string, params config.ModelParams, port int) *exec.Cmd {
+func failCmdBuilder(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
 	args := append(
 		[]string{"-test.run=TestHelperProcess", "--", "llama-server"},
-		buildArgs(modelName, params, port)...,
+		buildArgs(modelName, params)...,
 	)
 	args = append(args, "--fail")
 	cmd := exec.CommandContext(ctx, os.Args[0], args...)
@@ -146,8 +157,8 @@ func newTestManager(cfg *config.Config) *Manager {
 
 func TestBuildArgs_minimal(t *testing.T) {
 	params := config.ModelParams{}
-	got := buildArgs("org/model", params, 19100)
-	want := []string{"-hf", "org/model", "--port", "19100", "--no-webui", "--parallel", "1"}
+	got := buildArgs("org/model", params)
+	want := []string{"-hf", "org/model", "--port", "0", "--no-webui", "--metrics", "--parallel", "1"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("buildArgs minimal: got %v, want %v", got, want)
 	}
@@ -161,11 +172,12 @@ func TestBuildArgs_full(t *testing.T) {
 		Pooling:   "mean",
 		Extra:     []string{"--flash-attn"},
 	}
-	got := buildArgs("org/model", params, 19101)
+	got := buildArgs("org/model", params)
 	want := []string{
 		"-hf", "org/model",
-		"--port", "19101",
+		"--port", "0",
 		"--no-webui",
+		"--metrics",
 		"--parallel", "4",
 		"-ngl", "32",
 		"-c", "4096",
@@ -179,21 +191,11 @@ func TestBuildArgs_full(t *testing.T) {
 
 func TestBuildArgs_zeroGPULayersOmitted(t *testing.T) {
 	params := config.ModelParams{GPULayers: 0, Context: 0}
-	args := buildArgs("org/model", params, 19102)
+	args := buildArgs("org/model", params)
 	for _, a := range args {
 		if a == "-ngl" || a == "-c" {
 			t.Errorf("unexpected flag %q in args: %v", a, args)
 		}
-	}
-}
-
-func TestFreePort(t *testing.T) {
-	port, err := freePort()
-	if err != nil {
-		t.Fatalf("freePort: %v", err)
-	}
-	if port <= 0 || port > 65535 {
-		t.Errorf("freePort returned out-of-range port: %d", port)
 	}
 }
 

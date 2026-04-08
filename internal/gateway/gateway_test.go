@@ -253,7 +253,7 @@ func TestGateway_Models(t *testing.T) {
 	cfg := testConfig("org/model", 1, "")
 	mgr := &mockManager{
 		models: []monitor.ModelInfo{
-			{ID: "org/model", Status: "healthy"},
+			{ID: "org/model", Status: "loaded"},
 		},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
@@ -288,8 +288,8 @@ func TestGateway_Models(t *testing.T) {
 	if resp.Data[0].OwnedBy != "wire" {
 		t.Errorf("owned_by = %q, want %q", resp.Data[0].OwnedBy, "wire")
 	}
-	if resp.Data[0].Status != "healthy" {
-		t.Errorf("status = %q, want %q", resp.Data[0].Status, "healthy")
+	if resp.Data[0].Status != "loaded" {
+		t.Errorf("status = %q, want %q", resp.Data[0].Status, "loaded")
 	}
 }
 

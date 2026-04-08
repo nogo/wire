@@ -154,11 +154,11 @@ func TestHub_Snapshot(t *testing.T) {
 }
 
 func TestHub_PollMetrics(t *testing.T) {
-	slots, _ := json.Marshal([]Slot{{ID: 0, State: SlotIdle}})
-	metrics := `# TYPE llama_kv_cache_usage_ratio gauge
-llama_kv_cache_usage_ratio 0.5
-# TYPE llama_requests_processing gauge
-llama_requests_processing 1
+	slots, _ := json.Marshal([]slotJSON{{ID: 0, IsProcessing: false}})
+	metrics := `# TYPE llamacpp:requests_processing gauge
+llamacpp:requests_processing 1
+# TYPE llamacpp:predicted_tokens_seconds gauge
+llamacpp:predicted_tokens_seconds 42.5
 `
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -194,9 +194,6 @@ llama_requests_processing 1
 			if msg.Kind == MsgMetricsTick {
 				if msg.Metrics == nil {
 					t.Fatal("Metrics is nil")
-				}
-				if msg.Metrics.KVCacheUsageRatio != 0.5 {
-					t.Errorf("KVCacheUsageRatio: got %v, want 0.5", msg.Metrics.KVCacheUsageRatio)
 				}
 				if msg.Metrics.RequestsProcessing != 1 {
 					t.Errorf("RequestsProcessing: got %d, want 1", msg.Metrics.RequestsProcessing)

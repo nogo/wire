@@ -217,13 +217,12 @@ func (h *Hub) fetchBackend(b BackendStatus) *BackendMetrics {
 
 	if data, err := h.fetch(base + "/metrics"); err == nil {
 		g := ParsePrometheusGauges(string(data))
-		m.KVCacheUsageRatio = g["llama_kv_cache_usage_ratio"]
-		m.RequestsProcessing = int(g["llama_requests_processing"])
-		m.RequestsPending = int(g["llama_requests_pending"])
-		m.TokensPerSecond = g["llama_tokens_predicted_per_second"]
-		m.PromptTokensPerSecond = g["llama_prompt_tokens_per_second"]
-		m.TokensPredictedTotal = int64(g["llama_tokens_predicted_total"])
-		m.PromptTokensTotal = int64(g["llama_prompt_tokens_total"])
+		m.RequestsProcessing = int(g["llamacpp:requests_processing"])
+		m.RequestsPending = int(g["llamacpp:requests_deferred"])
+		m.TokensPerSecond = g["llamacpp:predicted_tokens_seconds"]
+		m.PromptTokensPerSecond = g["llamacpp:prompt_tokens_seconds"]
+		m.TokensPredictedTotal = int64(g["llamacpp:tokens_predicted_total"])
+		m.PromptTokensTotal = int64(g["llamacpp:prompt_tokens_total"])
 	} else {
 		h.log.Debug("metrics fetch failed", "backend", b.Name, "error", err)
 	}

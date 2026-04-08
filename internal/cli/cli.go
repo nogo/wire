@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/nogo/wire/internal"
-	"github.com/nogo/wire/internal/build"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/gateway"
 	"github.com/nogo/wire/internal/monitor"
@@ -20,16 +18,11 @@ import (
 const usageText = `Usage: wire <command> [arguments]
 
 Commands:
-  start               Start the gateway (foreground)
-  build               Build and install llama-server from source (ROCm)
-  remove              Remove a previous llama-server installation
+  up                  Start the gateway (foreground)
   version             Print version and exit
 
 Environment:
   WIRE_CONFIG         Config file path (default: ~/.config/wire/config.yaml)
-  WIRE_LLAMA_SRC      llama.cpp source directory (default: ~/Development/llama.cpp)
-  WIRE_GPU_TARGET     AMD GPU target (default: gfx1151; find yours: rocminfo | grep gfx)
-  WIRE_PREFIX         Install prefix (default: ~/.local)
 `
 
 // Run dispatches CLI commands from the given argument slice (os.Args[1:]).
@@ -51,22 +44,18 @@ func dispatch(args []string) error {
 	case "help", "--help", "-h":
 		fmt.Print(usageText)
 		return nil
-	case "start":
-		return runStart()
+	case "up":
+		return runUp()
 	case "version", "--version", "-v":
 		fmt.Printf("wire %s (%s) built %s\n", internal.Version, internal.Commit, internal.BuildDate)
 		return nil
-	case "build":
-		return runBuild(args[1:])
-	case "remove":
-		return runRemove(args[1:])
 	default:
 		fmt.Print(usageText)
 		return fmt.Errorf("unknown command: %q", args[0])
 	}
 }
 
-func runStart() error {
+func runUp() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -122,34 +111,3 @@ func runStart() error {
 	}
 }
 
-func runBuild(args []string) error {
-	opts, err := build.DefaultOptions()
-	if err != nil {
-		return err
-	}
-
-	fs := flag.NewFlagSet("build", flag.ContinueOnError)
-	fs.StringVar(&opts.Source, "source", opts.Source, "path to llama.cpp git checkout")
-	fs.StringVar(&opts.GPUTarget, "gpu-target", opts.GPUTarget, "AMD GPU target (find yours: rocminfo | grep gfx)")
-	fs.StringVar(&opts.Prefix, "prefix", opts.Prefix, "install prefix")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	return build.Build(opts)
-}
-
-func runRemove(args []string) error {
-	opts, err := build.DefaultOptions()
-	if err != nil {
-		return err
-	}
-
-	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
-	fs.StringVar(&opts.Source, "source", opts.Source, "path to llama.cpp git checkout")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	return build.Remove(opts)
-}

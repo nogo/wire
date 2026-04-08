@@ -5,67 +5,122 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>wire monitor</title>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0d1117; color: #e6edf3; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; padding: 16px; }
+:root {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #7d8590;
+  --faint: #484f58;
+  --card-bg: #161b22;
+  --border: #30363d;
+  --border-subtle: #21262d;
+  --border-faint: #161b22;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --green-bg: #1a2e1a;
+  --green-border: #2ea043;
+  --red: #f85149;
+  --red-bg: #2e1a1a;
+  --red-border: #da3633;
+  --yellow: #d29922;
+  --yellow-bg: #2a2512;
+  --yellow-border: #9e6a03;
+  --blue-bar: #388bfd;
+  --purple-bar: #6e40c9;
+  --teal-bar: #1abc9c;
+  --bar-track: #21262d;
+  --slot-idle: #30363d;
+}
 
-#header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #21262d; padding-bottom: 12px; }
-#header h1 { font-size: 14px; font-weight: normal; color: #7d8590; letter-spacing: 0.05em; }
-#header h1 span { color: #e6edf3; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; flex-shrink: 0; }
-.dot.disconnected { background: #f85149; }
-#conn-label { font-size: 11px; color: #7d8590; margin-left: auto; }
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #656d76;
+    --faint: #8b949e;
+    --card-bg: #f6f8fa;
+    --border: #d0d7de;
+    --border-subtle: #d8dee4;
+    --border-faint: #f6f8fa;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --green-bg: #dafbe1;
+    --green-border: #4ac26b;
+    --red: #cf222e;
+    --red-bg: #ffebe9;
+    --red-border: #ff8182;
+    --yellow: #9a6700;
+    --yellow-bg: #fff8c5;
+    --yellow-border: #d4a72c;
+    --blue-bar: #218bff;
+    --purple-bar: #8250df;
+    --teal-bar: #1a997b;
+    --bar-track: #d8dee4;
+    --slot-idle: #d0d7de;
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--fg); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; padding: 16px; }
+
+#header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; }
+#header h1 { font-size: 14px; font-weight: normal; color: var(--muted); letter-spacing: 0.05em; }
+#header h1 span { color: var(--fg); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.dot.disconnected { background: var(--red); }
+#conn-label { font-size: 11px; color: var(--muted); margin-left: auto; }
 
 .section { margin-bottom: 20px; }
 .section.hidden { display: none; }
-.section-title { font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 10px; }
+.section-title { font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 10px; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
 
-.card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 14px; }
+.card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
 .card-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
-.card-name { font-size: 13px; font-weight: bold; color: #58a6ff; }
-.card-sub { font-size: 11px; color: #7d8590; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-name { font-size: 13px; font-weight: bold; color: var(--accent); }
+.card-sub { font-size: 11px; color: var(--muted); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: bold; flex-shrink: 0; margin-left: 8px; }
-.badge.healthy   { background: #1a2e1a; color: #3fb950; border: 1px solid #2ea043; }
-.badge.unhealthy { background: #2e1a1a; color: #f85149; border: 1px solid #da3633; }
-.badge.swapping  { background: #2a2512; color: #d29922; border: 1px solid #9e6a03; }
+.badge.healthy   { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+.badge.unhealthy { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+.badge.swapping  { background: var(--yellow-bg); color: var(--yellow); border: 1px solid var(--yellow-border); }
 
 .bar-row { margin-bottom: 8px; }
-.bar-label { display: flex; justify-content: space-between; font-size: 10px; color: #7d8590; margin-bottom: 3px; }
-.bar-track { background: #21262d; border-radius: 2px; height: 7px; overflow: hidden; }
+.bar-label { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+.bar-track { background: var(--bar-track); border-radius: 2px; height: 7px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
-.bar-fill.kv     { background: #388bfd; }
-.bar-fill.vram   { background: #6e40c9; }
-.bar-fill.gpu    { background: #1abc9c; }
-.bar-fill.warn   { background: #d29922; }
-.bar-fill.danger { background: #f85149; }
+.bar-fill.kv     { background: var(--blue-bar); }
+.bar-fill.vram   { background: var(--purple-bar); }
+.bar-fill.gpu    { background: var(--teal-bar); }
+.bar-fill.warn   { background: var(--yellow); }
+.bar-fill.danger { background: var(--red); }
 
 .metrics-row { display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
 .metric { min-width: 70px; }
-.metric-label { font-size: 10px; color: #484f58; margin-bottom: 1px; }
+.metric-label { font-size: 10px; color: var(--faint); margin-bottom: 1px; }
 .metric-value { font-size: 15px; font-weight: bold; }
-.temp-ok   { color: #3fb950; }
-.temp-warn { color: #d29922; }
-.temp-hot  { color: #f85149; }
+.temp-ok   { color: var(--green); }
+.temp-warn { color: var(--yellow); }
+.temp-hot  { color: var(--red); }
 
-.slots { margin-top: 8px; border-top: 1px solid #21262d; }
-.slot-row { display: grid; grid-template-columns: 24px 90px 1fr 1fr; gap: 4px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid #161b22; }
-.slot-id { color: #484f58; }
-.slot-state.generating { color: #3fb950; }
-.slot-state.idle       { color: #30363d; }
-.slot-tokens { text-align: right; color: #7d8590; }
-.slot-ctx    { text-align: right; color: #484f58; }
+.slots { margin-top: 8px; border-top: 1px solid var(--border-subtle); }
+.slot-row { display: grid; grid-template-columns: 24px 90px 1fr 1fr; gap: 4px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border-faint); }
+.slot-id { color: var(--faint); }
+.slot-state.generating { color: var(--green); }
+.slot-state.idle       { color: var(--slot-idle); }
+.slot-tokens { text-align: right; color: var(--muted); }
+.slot-ctx    { text-align: right; color: var(--faint); }
 
-#log-entries { font-size: 11px; border: 1px solid #21262d; border-radius: 4px; max-height: 280px; overflow-y: auto; }
-.log-row { display: grid; grid-template-columns: 68px 110px 72px 80px 1fr; gap: 6px; padding: 3px 8px; border-bottom: 1px solid #161b22; align-items: center; }
+#log-entries { font-size: 11px; border: 1px solid var(--border-subtle); border-radius: 4px; max-height: 280px; overflow-y: auto; }
+.log-row { display: grid; grid-template-columns: 68px 110px 72px 80px 1fr; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--border-faint); align-items: center; }
 .log-row:last-child { border-bottom: none; }
-.log-time    { color: #484f58; }
-.log-backend { color: #58a6ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.log-tokens  { text-align: right; color: #7d8590; }
-.log-toks    { text-align: right; color: #3fb950; }
-.log-kind    { color: #484f58; }
-.log-empty   { padding: 8px; color: #484f58; text-align: center; }
+.log-time    { color: var(--faint); }
+.log-backend { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-tokens  { text-align: right; color: var(--muted); }
+.log-toks    { text-align: right; color: var(--green); }
+.log-kind    { color: var(--faint); }
+.log-empty   { padding: 8px; color: var(--faint); text-align: center; }
+.empty-state { padding: 24px; color: var(--faint); text-align: center; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -157,8 +212,15 @@ function onSnapshot(msg) {
 
   const backendCards = document.getElementById("backend-cards");
   backendCards.textContent = "";
-  for (const [name, b] of Object.entries(msg.backends || {})) {
-    backendCards.appendChild(buildBackendCard(name, b));
+  const backends = Object.entries(msg.backends || {});
+  if (backends.length === 0) {
+    const empty = div("empty-state");
+    empty.textContent = "no backends loaded \u2014 send a request to load a model on demand";
+    backendCards.appendChild(empty);
+  } else {
+    for (const [name, b] of backends) {
+      backendCards.appendChild(buildBackendCard(name, b));
+    }
   }
 
   renderLog();
@@ -251,8 +313,16 @@ function buildBackendCard(name, b) {
 }
 
 function onMetrics(msg) {
-  const card = document.getElementById("backend-" + msg.backend);
-  if (!card) return;
+  // If we receive metrics for a backend that has no card yet, build one.
+  let card = document.getElementById("backend-" + msg.backend);
+  if (!card) {
+    const backendCards = document.getElementById("backend-cards");
+    // Remove empty-state placeholder if present.
+    const empty = backendCards.querySelector(".empty-state");
+    if (empty) empty.remove();
+    card = buildBackendCard(msg.backend, { status: "healthy", model: msg.backend });
+    backendCards.appendChild(card);
+  }
   const kv = Math.min(msg.kv_cache_pct || 0, 100);
   updateBarRow(card, "b-kv-pct", "b-kv-bar", kv.toFixed(1) + "%", kv, "kv");
   card.querySelector(".b-gen").textContent = (msg.gen_tok_s || 0).toFixed(1);

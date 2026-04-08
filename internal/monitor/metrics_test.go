@@ -6,13 +6,13 @@ import (
 )
 
 func TestParsePrometheusGauges_basic(t *testing.T) {
-	text := `# HELP llama_kv_cache_usage_ratio KV cache usage ratio
-# TYPE llama_kv_cache_usage_ratio gauge
-llama_kv_cache_usage_ratio 0.125
-# TYPE llama_requests_processing gauge
-llama_requests_processing 2
-# TYPE llama_tokens_predicted_per_second gauge
-llama_tokens_predicted_per_second 50.04
+	text := `# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
+# TYPE llamacpp:prompt_tokens_total counter
+llamacpp:prompt_tokens_total 31
+# TYPE llamacpp:requests_processing gauge
+llamacpp:requests_processing 2
+# TYPE llamacpp:predicted_tokens_seconds gauge
+llamacpp:predicted_tokens_seconds 50.04
 `
 	got := ParsePrometheusGauges(text)
 
@@ -20,9 +20,9 @@ llama_tokens_predicted_per_second 50.04
 		key  string
 		want float64
 	}{
-		{"llama_kv_cache_usage_ratio", 0.125},
-		{"llama_requests_processing", 2},
-		{"llama_tokens_predicted_per_second", 50.04},
+		{"llamacpp:prompt_tokens_total", 31},
+		{"llamacpp:requests_processing", 2},
+		{"llamacpp:predicted_tokens_seconds", 50.04},
 	}
 	for _, c := range cases {
 		if got[c.key] != c.want {
@@ -76,8 +76,8 @@ bad_metric notanumber
 
 func TestParseSlots_basic(t *testing.T) {
 	data, _ := json.Marshal([]map[string]any{
-		{"id": 0, "state": 1, "n_ctx": 4096, "n_predict": 256, "tokens_predicted": 100, "tokens_evaluated": 50},
-		{"id": 1, "state": 0, "n_ctx": 4096, "n_predict": 256, "tokens_predicted": 0, "tokens_evaluated": 0},
+		{"id": 0, "n_ctx": 4096, "is_processing": true, "next_token": []map[string]any{{"n_decoded": 100}}},
+		{"id": 1, "n_ctx": 4096, "is_processing": false, "next_token": []map[string]any{{"n_decoded": 0}}},
 	})
 
 	slots, err := ParseSlots(data)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os/exec"
 	"sort"
@@ -36,9 +35,9 @@ func (s modelState) String() string {
 	case stateLoading:
 		return "loading"
 	case stateHealthy:
-		return "healthy"
+		return "loaded"
 	case stateDraining:
-		return "draining"
+		return "unloading"
 	default:
 		return "unknown"
 	}
@@ -72,7 +71,7 @@ type procState struct {
 type Manager struct {
 	cfg        *config.Config
 	log        *slog.Logger
-	cmdBuilder func(ctx context.Context, modelName string, params config.ModelParams, port int) *exec.Cmd
+	cmdBuilder func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd
 
 	// healthTimeout overrides the 120s waitHealthy timeout. Zero means 120s.
 	// Set in tests to speed up failure scenarios.
@@ -93,8 +92,8 @@ func New(cfg *config.Config, log *slog.Logger) *Manager {
 	m.log = log
 	m.procs = make(map[string]*procState)
 	m.eventCh = make(chan monitor.ServerEvent, 256)
-	m.cmdBuilder = func(ctx context.Context, modelName string, params config.ModelParams, port int) *exec.Cmd {
-		return exec.CommandContext(ctx, "llama-server", buildArgs(modelName, params, port)...)
+	m.cmdBuilder = func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
+		return exec.CommandContext(ctx, "llama-server", buildArgs(modelName, params)...)
 	}
 	return m
 }
@@ -559,18 +558,7 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 
 		attempts++
 
-		port, err := freePort()
-		if err != nil {
-			m.log.Error("port allocation failed", "model", modelName, "error", err)
-			if !ps.isWarmup {
-				m.failLoad(ps, modelName, err)
-				return
-			}
-			continue
-		}
-
 		ps.mu.Lock()
-		ps.port = port
 		if !firstLoad {
 			ps.restarts++
 		}
@@ -578,7 +566,7 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 		params := ps.params
 		ps.mu.Unlock()
 
-		cmd, err := m.launch(ctx, modelName, params, port)
+		cmd, parser, err := m.launch(ctx, modelName, params)
 		if err != nil {
 			m.log.Error("failed to launch llama-server", "model", modelName, "error", err)
 			if !ps.isWarmup {
@@ -588,7 +576,27 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 			continue
 		}
 
+		// Wait for llama-server to report its listening port via stdout.
+		var port int
+		select {
+		case port = <-parser.PortCh:
+		case <-ctx.Done():
+			cmd.Process.Kill()
+			cmd.Wait() //nolint:errcheck
+			return
+		case <-time.After(m.effectiveHealthTimeout()):
+			m.log.Error("timed out waiting for listening port", "model", modelName)
+			cmd.Process.Kill()
+			cmd.Wait() //nolint:errcheck
+			if !ps.isWarmup {
+				m.failLoad(ps, modelName, fmt.Errorf("timed out waiting for listening port"))
+				return
+			}
+			continue
+		}
+
 		ps.mu.Lock()
+		ps.port = port
 		ps.proc = cmd
 		ps.mu.Unlock()
 
@@ -630,7 +638,7 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 			Backend:    modelName,
 			Kind:       monitor.EventModelLoad,
 			DurationMs: float64(loadDur.Milliseconds()),
-			Message:    "healthy",
+			Message:    "loaded",
 		})
 
 		exitCh := make(chan error, 1)
@@ -697,9 +705,11 @@ func (m *Manager) failLoad(ps *procState, modelName string, err error) {
 	m.mu.Unlock()
 }
 
-// launch starts a llama-server process and wires its stdout/stderr to slog.
-func (m *Manager) launch(ctx context.Context, modelName string, params config.ModelParams, port int) (*exec.Cmd, error) {
-	cmd := m.cmdBuilder(ctx, modelName, params, port)
+// launch starts a llama-server process with --port 0 and wires its
+// stdout/stderr to the event parser. The actual listening port is sent
+// to parser.PortCh once llama-server prints its "listening on" line.
+func (m *Manager) launch(ctx context.Context, modelName string, params config.ModelParams) (*exec.Cmd, *monitor.EventParser, error) {
+	cmd := m.cmdBuilder(ctx, modelName, params)
 
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -714,21 +724,24 @@ func (m *Manager) launch(ctx context.Context, modelName string, params config.Mo
 	cmd.Stderr = parser
 
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return cmd, nil
+	return cmd, parser, nil
 }
 
 // buildArgs constructs the llama-server command-line arguments for a model.
-func buildArgs(modelName string, params config.ModelParams, port int) []string {
+// Port 0 tells llama-server to pick a free port; the actual port is parsed
+// from stdout by the event parser.
+func buildArgs(modelName string, params config.ModelParams) []string {
 	slots := params.Slots
 	if slots <= 0 {
 		slots = 1
 	}
 	args := []string{
 		"-hf", modelName,
-		"--port", strconv.Itoa(port),
+		"--port", "0",
 		"--no-webui",
+		"--metrics",
 		"--parallel", strconv.Itoa(slots),
 	}
 	if params.GPULayers > 0 {
@@ -743,16 +756,6 @@ func buildArgs(modelName string, params config.ModelParams, port int) []string {
 	return append(args, params.Extra...)
 }
 
-// freePort finds a free TCP port by binding to :0 and immediately releasing it.
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		return 0, err
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return port, nil
-}
 
 // waitHealthy polls GET /health on the given port every second until it
 // returns 200 OK, the context is cancelled, or the timeout elapses.

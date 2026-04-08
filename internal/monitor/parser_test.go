@@ -1,13 +1,18 @@
 package monitor
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
 
-func newTestParser(ch chan ServerEvent) *eventParser {
+func newTestParser(ch chan ServerEvent) *EventParser {
 	return NewEventParser(slog.Default(), "test", ch)
 }
 
@@ -204,6 +209,212 @@ func TestParser_DropOnFullChannel(t *testing.T) {
 
 	if p.Dropped != 1 {
 		t.Errorf("Dropped: got %d, want 1", p.Dropped)
+	}
+}
+
+// New llama-server format uses "tokens per second" instead of "tokens/s".
+func TestParser_PromptEval_NewFormat(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	line := "prompt eval time =     181.35 ms /    31 tokens (    5.85 ms per token,   170.94 tokens per second)\n"
+	p.Write([]byte(line)) //nolint:errcheck
+
+	ev := <-ch
+	if ev.Kind != EventPromptEval {
+		t.Fatalf("kind: got %v, want EventPromptEval", ev.Kind)
+	}
+	if ev.Tokens != 31 {
+		t.Errorf("Tokens: got %v, want 31", ev.Tokens)
+	}
+	if ev.TokPerSec != 170.94 {
+		t.Errorf("TokPerSec: got %v, want 170.94", ev.TokPerSec)
+	}
+}
+
+func TestParser_GenEval_NewFormat(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	line := "       eval time =     235.85 ms /    10 tokens (   23.58 ms per token,    42.40 tokens per second)\n"
+	p.Write([]byte(line)) //nolint:errcheck
+
+	ev := <-ch
+	if ev.Kind != EventGenEval {
+		t.Fatalf("kind: got %v, want EventGenEval", ev.Kind)
+	}
+	if ev.Tokens != 10 {
+		t.Errorf("Tokens: got %v, want 10", ev.Tokens)
+	}
+	if ev.TokPerSec != 42.40 {
+		t.Errorf("TokPerSec: got %v, want 42.40", ev.TokPerSec)
+	}
+}
+
+func TestParser_SlotAssign_NewFormat(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	p.Write([]byte("slot launch_slot_: id  2 | task 0 | processing task, is_child = 0\n")) //nolint:errcheck
+
+	ev := <-ch
+	if ev.Kind != EventSlotAssign {
+		t.Fatalf("kind: got %v, want EventSlotAssign", ev.Kind)
+	}
+	if ev.Slot != 2 {
+		t.Errorf("Slot: got %v, want 2", ev.Slot)
+	}
+}
+
+func TestParser_SlotRelease_NewFormat(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	p.Write([]byte("slot      release: id  0 | task 0 | stop processing: n_tokens = 40, truncated = 0\n")) //nolint:errcheck
+
+	ev := <-ch
+	if ev.Kind != EventSlotRelease {
+		t.Fatalf("kind: got %v, want EventSlotRelease", ev.Kind)
+	}
+	if ev.Slot != 0 {
+		t.Errorf("Slot: got %v, want 0", ev.Slot)
+	}
+}
+
+func TestParser_ModelLoad_NewFormat(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	p.Write([]byte("load_tensors: offloading 39 repeating layers to GPU\n")) //nolint:errcheck
+
+	ev := <-ch
+	if ev.Kind != EventModelLoad {
+		t.Fatalf("kind: got %v, want EventModelLoad", ev.Kind)
+	}
+}
+
+func TestParser_VRAMAlloc_NewFormat(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	p.Write([]byte("load_tensors:        ROCm0 model buffer size =  4735.80 MiB\n")) //nolint:errcheck
+
+	ev := <-ch
+	if ev.Kind != EventVRAMAlloc {
+		t.Fatalf("kind: got %v, want EventVRAMAlloc", ev.Kind)
+	}
+}
+
+// TestParser_LiveLlamaServer verifies that the parser regexes match actual
+// llama-server output. This catches silent breakage when llama-server changes
+// its log format. Requires llama-server on PATH and a small GGUF model cached.
+// Skipped by default; run with: go test -run TestParser_LiveLlamaServer -live
+func TestParser_LiveLlamaServer(t *testing.T) {
+	if !testing.Verbose() {
+		t.Skip("live test: run with -v to enable, requires llama-server on PATH")
+	}
+
+	model := os.Getenv("WIRE_TEST_MODEL")
+	if model == "" {
+		model = "unsloth/granite-4.0-h-tiny-GGUF:Q5_K_M"
+	}
+
+	if _, err := exec.LookPath("llama-server"); err != nil {
+		t.Skip("llama-server not found on PATH")
+	}
+
+	ch := make(chan ServerEvent, 256)
+	parser := NewEventParser(slog.Default(), "live-test", ch)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "llama-server",
+		"-hf", model,
+		"--port", "0",
+		"--no-webui",
+		"--metrics",
+		"--parallel", "1",
+		"-ngl", "99",
+		"-c", "2048",
+	)
+	cmd.Stdout = parser
+	cmd.Stderr = parser
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start llama-server: %v", err)
+	}
+	defer func() {
+		cmd.Process.Kill() //nolint:errcheck
+		cmd.Wait()         //nolint:errcheck
+	}()
+
+	// Collect events until we see the listening port.
+	var port int
+	select {
+	case port = <-parser.PortCh:
+	case <-time.After(60 * time.Second):
+		t.Fatal("timed out waiting for llama-server to start")
+	}
+	t.Logf("llama-server listening on port %d", port)
+
+	// Collect startup events — expect at least model_load or vram_alloc.
+	seen := make(map[EventKind]bool)
+	drain(ch, seen)
+
+	if !seen[EventModelLoad] && !seen[EventVRAMAlloc] {
+		t.Error("expected EventModelLoad or EventVRAMAlloc during startup, got neither")
+	}
+
+	// Wait for health.
+	healthURL := fmt.Sprintf("http://localhost:%d/health", port)
+	client := &http.Client{Timeout: 2 * time.Second}
+	for i := 0; i < 30; i++ {
+		resp, err := client.Get(healthURL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				break
+			}
+		}
+		time.Sleep(time.Second)
+	}
+
+	// Send a request to generate eval events.
+	reqBody := `{"model":"test","messages":[{"role":"user","content":"Hi"}],"max_tokens":8}`
+	resp, err := http.Post(
+		fmt.Sprintf("http://localhost:%d/v1/chat/completions", port),
+		"application/json",
+		strings.NewReader(reqBody),
+	)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	// Wait for eval events to arrive.
+	time.Sleep(time.Second)
+	drain(ch, seen)
+
+	// Verify request-path events were parsed.
+	if !seen[EventPromptEval] {
+		t.Error("EventPromptEval not seen — prompt eval regex may be stale")
+	}
+	if !seen[EventGenEval] {
+		t.Error("EventGenEval not seen — gen eval regex may be stale")
+	}
+
+	t.Logf("event kinds seen: %v", seen)
+}
+
+func drain(ch <-chan ServerEvent, seen map[EventKind]bool) {
+	for {
+		select {
+		case ev := <-ch:
+			seen[ev.Kind] = true
+		default:
+			return
+		}
 	}
 }
 

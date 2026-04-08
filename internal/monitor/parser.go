@@ -12,35 +12,40 @@ import (
 // Initialised once at package init — never per-line.
 var (
 	rePromptEval = regexp.MustCompile(
-		`prompt eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens\s*\([^,]+,\s*([\d.]+)\s*tokens/s\)`)
+		`prompt eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens\s*\([^,]+,\s*([\d.]+)\s*tokens(?:/s| per second)\)`)
 	// reGenEval matches "eval time" lines; checked after rePromptEval so
 	// "prompt eval time" lines are never reached here.
 	reGenEval = regexp.MustCompile(
-		`\beval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens\s*\([^,]+,\s*([\d.]+)\s*tokens/s\)`)
-	reSlotProc  = regexp.MustCompile(`slot\s+(\d+)\s+is\s+processing`)
-	reSlotRel   = regexp.MustCompile(`slot\s+(\d+)\s+released`)
-	reModelLoad = regexp.MustCompile(`llm_load_tensors:\s+offloading\s+(\d+)\s+layers\s+to\s+GPU`)
-	reVRAMAlloc = regexp.MustCompile(`llm_load_tensors:\s+\S+\s+buffer\s+size\s*=\s*([\d.]+)\s*MiB`)
+		`\beval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens\s*\([^,]+,\s*([\d.]+)\s*tokens(?:/s| per second)\)`)
+	reSlotProc = regexp.MustCompile(`slot\s+(?:(\d+)\s+is\s+processing|launch_slot_:\s+id\s+(\d+)\s+\|.*\|\s+processing task)`)
+	reSlotRel  = regexp.MustCompile(`slot\s+(?:(\d+)\s+released|release:\s+id\s+(\d+)\s+\|.*\|\s+stop processing)`)
+	reModelLoad = regexp.MustCompile(`load_tensors:\s+offloading\s+(\d+)\s+(?:repeating\s+)?layers\s+to\s+GPU`)
+	reVRAMAlloc = regexp.MustCompile(`load_tensors:\s+\S+\s+(?:model\s+)?buffer\s+size\s*=\s*([\d.]+)\s*MiB`)
+	reListen    = regexp.MustCompile(`server is listening on http://[\d.]+:(\d+)`)
 )
 
-// eventParser implements io.Writer. It buffers bytes, splits on newlines,
+// EventParser implements io.Writer. It buffers bytes, splits on newlines,
 // writes each complete line to slog.Debug (preserving existing behaviour), and
 // sends a structured ServerEvent to ch. Sends are non-blocking; if ch is full
 // the event is dropped and Dropped is incremented.
-type eventParser struct {
+type EventParser struct {
 	log     *slog.Logger
 	name    string
 	ch      chan<- ServerEvent
 	buf     bytes.Buffer
 	Dropped uint64
+
+	// PortCh receives the listening port parsed from llama-server stdout.
+	// Sent at most once; buffered so the parser never blocks.
+	PortCh chan int
 }
 
-// NewEventParser returns an eventParser for the named backend.
-func NewEventParser(log *slog.Logger, name string, ch chan<- ServerEvent) *eventParser {
-	return &eventParser{log: log, name: name, ch: ch}
+// NewEventParser returns an EventParser for the named backend.
+func NewEventParser(log *slog.Logger, name string, ch chan<- ServerEvent) *EventParser {
+	return &EventParser{log: log, name: name, ch: ch, PortCh: make(chan int, 1)}
 }
 
-func (p *eventParser) Write(data []byte) (int, error) {
+func (p *EventParser) Write(data []byte) (int, error) {
 	p.buf.Write(data)
 	for {
 		b := p.buf.Bytes()
@@ -64,7 +69,7 @@ func (p *eventParser) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func (p *eventParser) parse(line string) ServerEvent {
+func (p *EventParser) parse(line string) ServerEvent {
 	ev := ServerEvent{
 		Time:    time.Now(),
 		Backend: p.name,
@@ -89,13 +94,13 @@ func (p *eventParser) parse(line string) ServerEvent {
 
 	if m := reSlotProc.FindStringSubmatch(line); m != nil {
 		ev.Kind = EventSlotAssign
-		ev.Slot, _ = strconv.Atoi(m[1])
+		ev.Slot, _ = strconv.Atoi(firstNonEmpty(m[1], m[2]))
 		return ev
 	}
 
 	if m := reSlotRel.FindStringSubmatch(line); m != nil {
 		ev.Kind = EventSlotRelease
-		ev.Slot, _ = strconv.Atoi(m[1])
+		ev.Slot, _ = strconv.Atoi(firstNonEmpty(m[1], m[2]))
 		return ev
 	}
 
@@ -111,7 +116,29 @@ func (p *eventParser) parse(line string) ServerEvent {
 		return ev
 	}
 
+	if m := reListen.FindStringSubmatch(line); m != nil {
+		if port, err := strconv.Atoi(m[1]); err == nil {
+			select {
+			case p.PortCh <- port:
+			default:
+			}
+		}
+		ev.Kind = EventRaw
+		ev.Message = line
+		return ev
+	}
+
 	ev.Kind = EventRaw
 	ev.Message = line
 	return ev
+}
+
+// firstNonEmpty returns the first non-empty string from its arguments.
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
