@@ -17,10 +17,10 @@ func TestHandleWS_SnapshotOnConnect(t *testing.T) {
 	events := make(chan ServerEvent, 8)
 	hub := NewHub(slog.Default(), events, func() []BackendStatus {
 		return []BackendStatus{{
-			Name:    "test",
-			Model:   "some-model",
-			Healthy: true,
-			Port:    12345,
+			Name:   "test",
+			Model:  "some-model",
+			Loaded: true,
+			Port:   12345,
 		}}
 	})
 	hub.gpus = nil

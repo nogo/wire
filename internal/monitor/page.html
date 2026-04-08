@@ -81,8 +81,8 @@ body { background: var(--bg); color: var(--fg); font-family: ui-monospace, SFMon
 .card-sub { font-size: 11px; color: var(--muted); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: bold; flex-shrink: 0; margin-left: 8px; }
-.badge.healthy   { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
-.badge.unhealthy { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+.badge.loaded    { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+.badge.unloaded  { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
 .badge.swapping  { background: var(--yellow-bg); color: var(--yellow); border: 1px solid var(--yellow-border); }
 
 .bar-row { margin-bottom: 8px; }
@@ -276,7 +276,7 @@ function onGPU(msg) {
 // ── Backend cards ─────────────────────────────────────────────────────────────
 
 function buildBackendCard(name, b) {
-  const status = b.status || "unhealthy";
+  const status = b.status || "unloaded";
   const model = b.model || "";
 
   const card = div("card");
@@ -323,7 +323,7 @@ function onMetrics(msg) {
     // Remove empty-state placeholder if present.
     const empty = backendCards.querySelector(".empty-state");
     if (empty) empty.remove();
-    card = buildBackendCard(msg.backend, { status: "healthy", model: msg.backend });
+    card = buildBackendCard(msg.backend, { status: "loaded", model: msg.backend });
     backendCards.appendChild(card);
   }
   const ctx = Math.min(msg.ctx_usage_pct || 0, 100);
@@ -351,7 +351,7 @@ function onMetrics(msg) {
 function onState(msg) {
   const card = document.getElementById("backend-" + msg.backend);
   if (!card) return;
-  const status = msg.status || "unhealthy";
+  const status = msg.status || "unloaded";
   const badge = card.querySelector(".b-badge");
   badge.textContent = status;
   badge.className = "badge b-badge " + status;

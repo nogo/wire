@@ -205,7 +205,7 @@ llamacpp:predicted_tokens_seconds 42.5
 	var port int
 	fmt.Sscanf(srv.URL, "http://127.0.0.1:%d", &port)
 
-	backends := []BackendStatus{{Name: "local", Port: port, Healthy: true}}
+	backends := []BackendStatus{{Name: "local", Port: port, Loaded: true}}
 	events := make(chan ServerEvent, 8)
 	h := newTestHub(t, events, backends)
 	h.Start()

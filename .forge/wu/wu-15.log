@@ -1,0 +1,17 @@
+All tests pass. The only failure is the `tidy` step — it verifies `go.mod`/`go.sum` are committed, which they aren't yet since I don't commit without being asked. Everything else is clean:
+
+- `vet` ✓
+- `fmt:check` ✓  
+- `test` ✓ (all 5 `TestWatch_*` tests pass)
+- `lint` ✓ (staticcheck not installed, skipped)
+- `tidy` ✗ — needs `go.mod`/`go.sum` committed
+
+Once you commit those two files, `mise run check` will pass fully.
+
+---
+
+**What was created:**
+
+`internal/config/watch.go` — `Watch(ctx, log)` watches the **directory** containing the config file (not the file itself) so rename-based editor saves work. A single goroutine runs the event loop: filesystem events for other files are filtered by basename, each matching event resets a 500ms debounce timer, and when the timer fires it calls `Load()`. Valid configs are sent non-blocking on a buffered channel (size 1); invalid configs are logged and dropped. The goroutine exits and closes the channel when `ctx` is cancelled.
+
+`internal/config/watch_test.go` — five tests covering: successful reload, invalid config rejection (validation failure, nothing emitted), debounce (3 rapid writes → 1 reload), context cancellation (channel closed), and write-rename editor pattern (atomic rename detected via directory watch).

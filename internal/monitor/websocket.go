@@ -114,9 +114,9 @@ type backendSnapInfo struct {
 func buildSnapshotMsg(snap *HubSnapshot, statuses []BackendStatus) snapMsg {
 	backends := make(map[string]backendSnapInfo, len(statuses))
 	for _, s := range statuses {
-		status := "unhealthy"
-		if s.Healthy {
-			status = "healthy"
+		status := "unloaded"
+		if s.Loaded {
+			status = "loaded"
 		}
 		uptime := 0.0
 		if !s.StartedAt.IsZero() {
@@ -254,9 +254,9 @@ func toWireMsg(msg HubMessage) any {
 		}
 
 	case MsgStateChange:
-		status := "unhealthy"
-		if msg.Healthy {
-			status = "healthy"
+		status := "unloaded"
+		if msg.Loaded {
+			status = "loaded"
 		}
 		return stateWireMsg{
 			Type:    "state",

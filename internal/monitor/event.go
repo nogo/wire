@@ -35,7 +35,7 @@ type BackendStatus struct {
 	Model     string
 	Port      int
 	PID       int
-	Healthy   bool
+	Loaded    bool
 	Status    string // "loading", "loaded", "unloading", "idle"
 	StartedAt time.Time
 	Restarts  int

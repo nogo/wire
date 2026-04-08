@@ -266,10 +266,10 @@ func TestManager_AddrMissing(t *testing.T) {
 	}
 }
 
-func TestManager_HealthyMissing(t *testing.T) {
+func TestManager_LoadedMissing(t *testing.T) {
 	m := New(&config.Config{}, slog.Default())
-	if m.Healthy("nonexistent") {
-		t.Error("Healthy: expected false for unknown model")
+	if m.Loaded("nonexistent") {
+		t.Error("Loaded: expected false for unknown model")
 	}
 }
 
@@ -293,13 +293,13 @@ func TestManager_StartStop(t *testing.T) {
 	// Poll until healthy (up to 10s for the subprocess to spin up).
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if m.Healthy("org/test-model") {
+		if m.Loaded("org/test-model") {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if !m.Healthy("org/test-model") {
+	if !m.Loaded("org/test-model") {
 		t.Fatal("model did not become healthy within 10s")
 	}
 
@@ -320,8 +320,8 @@ func TestManager_StartStop(t *testing.T) {
 		t.Errorf("Stop: %v", err)
 	}
 
-	if m.Healthy("org/test-model") {
-		t.Error("Healthy: expected false after Stop")
+	if m.Loaded("org/test-model") {
+		t.Error("Loaded: expected false after Stop")
 	}
 }
 
@@ -403,7 +403,7 @@ func TestLoadOrGet_LRUEviction(t *testing.T) {
 	}
 
 	// Wait for warmup model A to become healthy.
-	waitHealthyModel(t, m, "org/model-a", 10*time.Second)
+	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
 
 	// Request model B: should evict A and load B.
 	addrB, releaseB, err := m.LoadOrGet(ctx, "org/model-b", cfg.Models["org/model-b"])
@@ -415,10 +415,10 @@ func TestLoadOrGet_LRUEviction(t *testing.T) {
 	}
 	releaseB()
 
-	if m.Healthy("org/model-a") {
+	if m.Loaded("org/model-a") {
 		t.Error("model-a should have been evicted")
 	}
-	if !m.Healthy("org/model-b") {
+	if !m.Loaded("org/model-b") {
 		t.Error("model-b should be healthy")
 	}
 
@@ -432,10 +432,10 @@ func TestLoadOrGet_LRUEviction(t *testing.T) {
 	}
 	releaseA2()
 
-	if m.Healthy("org/model-b") {
+	if m.Loaded("org/model-b") {
 		t.Error("model-b should have been evicted on second request")
 	}
-	if !m.Healthy("org/model-a") {
+	if !m.Loaded("org/model-a") {
 		t.Error("model-a should be healthy after reload")
 	}
 }
@@ -459,7 +459,7 @@ func TestLoadOrGet_InFlightProtection(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	waitHealthyModel(t, m, "org/model-a", 10*time.Second)
+	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
 
 	// Hold an in-flight request against model A.
 	_, releaseA, err := m.LoadOrGet(ctx, "org/model-a", cfg.Models["org/model-a"])
@@ -616,12 +616,12 @@ func TestLoadOrGet_CapacityLimit(t *testing.T) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// waitHealthyModel polls until the named model is healthy or the deadline passes.
-func waitHealthyModel(t *testing.T, m *Manager, name string, timeout time.Duration) {
+// waitLoadedModel polls until the named model is healthy or the deadline passes.
+func waitLoadedModel(t *testing.T, m *Manager, name string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if m.Healthy(name) {
+		if m.Loaded(name) {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)

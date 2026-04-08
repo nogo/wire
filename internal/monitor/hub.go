@@ -48,7 +48,7 @@ type HubMessage struct {
 	GPUs    []GPUMetrics    // MsgGPUTick
 	Event   *ServerEvent    // MsgServerEvent
 	Backend string          // MsgStateChange
-	Healthy bool            // MsgStateChange
+	Loaded  bool            // MsgStateChange
 }
 
 // Hub subscribes to the event channel from Manager, polls each backend's HTTP

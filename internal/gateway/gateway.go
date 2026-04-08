@@ -25,7 +25,7 @@ type nctxProvider interface {
 
 // backendManager is the subset of process.Manager the Gateway depends on.
 type backendManager interface {
-	Healthy(name string) bool
+	Loaded(name string) bool
 	// LoadOrGet returns the backend address for the named model, loading it on
 	// demand if not already running. The caller must call release() when the
 	// proxied request completes to decrement the in-flight counter.
@@ -185,7 +185,8 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 			pr.SetURL(target)
 			pr.Out.Host = target.Host
 		},
-		FlushInterval: -1,
+		FlushInterval:  -1,
+		ModifyResponse: rewriteContextLengthError,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			g.log.Error("proxy error", "model", payload.Model, "error", err)
 			writeError(w, http.StatusBadGateway, "server_error", "upstream error: "+err.Error(), "upstream_error")
@@ -227,7 +228,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	for _, name := range g.cfg.Warmup {
-		if g.mgr.Healthy(name) {
+		if g.mgr.Loaded(name) {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
 			return
@@ -286,6 +287,35 @@ func estimateTokens(body []byte) int {
 	}
 
 	return total / 4
+}
+
+// rewriteContextLengthError inspects non-2xx upstream responses for a
+// context_length_exceeded error code and rewrites the status to 400 to match
+// the OpenAI API standard. llama-server returns these as 500.
+func rewriteContextLengthError(resp *http.Response) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		resp.Body = io.NopCloser(bytes.NewReader(nil))
+		return nil
+	}
+
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && envelope.Error.Code == "context_length_exceeded" {
+		resp.StatusCode = http.StatusBadRequest
+		resp.Status = http.StatusText(http.StatusBadRequest)
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return nil
 }
 
 // writeError writes an OpenAI-format JSON error response.

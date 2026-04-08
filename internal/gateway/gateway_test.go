@@ -16,16 +16,16 @@ import (
 
 // mockManager is a test double for backendManager.
 type mockManager struct {
-	addrs   map[string]string
-	healthy map[string]bool
-	models  []monitor.ModelInfo
+	addrs  map[string]string
+	loaded map[string]bool
+	models []monitor.ModelInfo
 
 	// Optional override for LoadOrGet behaviour.
 	loadOrGetFn func(name string) (string, func(), error)
 }
 
-func (m *mockManager) Healthy(name string) bool {
-	return m.healthy[name]
+func (m *mockManager) Loaded(name string) bool {
+	return m.loaded[name]
 }
 
 func (m *mockManager) LoadOrGet(_ context.Context, name string, _ config.ModelParams) (string, func(), error) {
@@ -33,7 +33,7 @@ func (m *mockManager) LoadOrGet(_ context.Context, name string, _ config.ModelPa
 		return m.loadOrGetFn(name)
 	}
 	// Default: return addr if healthy, error otherwise.
-	if !m.healthy[name] {
+	if !m.loaded[name] {
 		return "", func() {}, context.DeadlineExceeded // triggers 504 — use a different sentinel
 	}
 	addr, ok := m.addrs[name]
@@ -69,10 +69,10 @@ func TestGateway_Health(t *testing.T) {
 	cfg := testConfig("org/model", 1, "")
 	cfg.Warmup = []string{"org/model"}
 
-	t.Run("healthy", func(t *testing.T) {
+	t.Run("loaded", func(t *testing.T) {
 		mgr := &mockManager{
-			addrs:   map[string]string{"org/model": "http://localhost:9999"},
-			healthy: map[string]bool{"org/model": true},
+			addrs:  map[string]string{"org/model": "http://localhost:9999"},
+			loaded: map[string]bool{"org/model": true},
 		}
 		g := newGateway(cfg, mgr, nil, slog.Default())
 		w := httptest.NewRecorder()
@@ -84,8 +84,8 @@ func TestGateway_Health(t *testing.T) {
 
 	t.Run("degraded", func(t *testing.T) {
 		mgr := &mockManager{
-			addrs:   map[string]string{},
-			healthy: map[string]bool{"org/model": false},
+			addrs:  map[string]string{},
+			loaded: map[string]bool{"org/model": false},
 		}
 		g := newGateway(cfg, mgr, nil, slog.Default())
 		w := httptest.NewRecorder()
@@ -156,8 +156,8 @@ func TestGateway_HandleRoute_Proxy(t *testing.T) {
 
 	cfg := testConfig("org/model", 1, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"org/model": backend.URL},
-		healthy: map[string]bool{"org/model": true},
+		addrs:  map[string]string{"org/model": backend.URL},
+		loaded: map[string]bool{"org/model": true},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
@@ -191,8 +191,8 @@ func TestGateway_HandleRoute_BodyPreserved(t *testing.T) {
 
 	cfg := testConfig("org/model", 1, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"org/model": backend.URL},
-		healthy: map[string]bool{"org/model": true},
+		addrs:  map[string]string{"org/model": backend.URL},
+		loaded: map[string]bool{"org/model": true},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
@@ -224,8 +224,8 @@ func TestGateway_HandleRoute_GlobMatch(t *testing.T) {
 		MaxModels: 1,
 	}
 	mgr := &mockManager{
-		addrs:   map[string]string{"org/Qwen3-8B": backend.URL},
-		healthy: map[string]bool{"org/Qwen3-8B": true},
+		addrs:  map[string]string{"org/Qwen3-8B": backend.URL},
+		loaded: map[string]bool{"org/Qwen3-8B": true},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
@@ -311,8 +311,8 @@ func TestHandleRoute_contextGuard_reject(t *testing.T) {
 
 	cfg := testConfig("org/model", 1, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"org/model": backend.URL},
-		healthy: map[string]bool{"org/model": true},
+		addrs:  map[string]string{"org/model": backend.URL},
+		loaded: map[string]bool{"org/model": true},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 	g.hub = &mockHub{nctx: map[string]int{"org/model": 100}}
@@ -346,8 +346,8 @@ func TestHandleRoute_contextGuard_pass(t *testing.T) {
 
 	cfg := testConfig("org/model", 1, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"org/model": backend.URL},
-		healthy: map[string]bool{"org/model": true},
+		addrs:  map[string]string{"org/model": backend.URL},
+		loaded: map[string]bool{"org/model": true},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 	g.hub = &mockHub{nctx: map[string]int{"org/model": 100}}
@@ -372,8 +372,8 @@ func TestHandleRoute_contextGuard_noHub(t *testing.T) {
 
 	cfg := testConfig("org/model", 1, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"org/model": backend.URL},
-		healthy: map[string]bool{"org/model": true},
+		addrs:  map[string]string{"org/model": backend.URL},
+		loaded: map[string]bool{"org/model": true},
 	}
 	// hub is nil — large requests must pass through unchanged.
 	g := newGateway(cfg, mgr, nil, slog.Default())
@@ -386,6 +386,40 @@ func TestHandleRoute_contextGuard_noHub(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 (guard must not fire when hub is nil)", w.Code)
+	}
+}
+
+func TestHandleRoute_upstreamContextLengthExceeded(t *testing.T) {
+	// Simulate llama-server returning 500 with context_length_exceeded error.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"message":"context too long","type":"invalid_request_error","code":"context_length_exceeded"}}`)) //nolint:errcheck
+	}))
+	defer backend.Close()
+
+	cfg := testConfig("org/model", 1, backend.URL)
+	mgr := &mockManager{
+		addrs:  map[string]string{"org/model": backend.URL},
+		loaded: map[string]bool{"org/model": true},
+	}
+	g := newGateway(cfg, mgr, nil, slog.Default())
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/model","messages":[{"role":"user","content":"hello"}]}`))
+	g.handleRoute(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj["code"] != "context_length_exceeded" {
+		t.Errorf("error code = %v, want context_length_exceeded", errObj["code"])
 	}
 }
 

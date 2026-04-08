@@ -2785,3 +2785,141 @@ model: sonnet
   ⏳ Waiting for work units... (14:07:47)
 
   ⏹ Ctrl-C received, finishing current work...
+forge runner
+project: /home/nogo/Development/projects/synapse-garage/wire
+queue:   /home/nogo/Development/projects/synapse-garage/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/synapse-garage/wire/.forge/verify
+context: /home/nogo/Development/projects/synapse-garage/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 18:06:35
+
+  Pre-flight verify...
+  Pre-flight: ✗ FAILED — project is not green before any WU ran
+
+[test] $ go test -race -count=1 ./...
+[fmt:check] $ UNFORMATTED=$(gofmt -l .)
+[vet] $ go vet ./...
+[lint] $ if command -v staticcheck >/dev/null 2>&1; then
+[lint] staticcheck not installed, skipping
+[lint] Finished in 2.8ms
+[fmt:check] FAIL: unformatted files:
+[fmt:check] internal/gateway/gateway.go
+[tidy] Finished in 30.6ms
+[vet] Finished in 159.0ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[test] ?   	github.com/nogo/wire/internal	[no test files]
+[test] ok  	github.com/nogo/wire/internal/cli	1.007s
+[test] ok  	github.com/nogo/wire/internal/config	1.010s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.021s
+[test] ok  	github.com/nogo/wire/internal/monitor	2.167s
+[test] ok  	github.com/nogo/wire/internal/process	16.511s
+[test] Finished in 17.31s
+Finished in 17.31s
+[fmt:check] ERROR task failed
+
+  Fix the baseline, then restart the runner.
+forge runner
+project: /home/nogo/Development/projects/synapse-garage/wire
+queue:   /home/nogo/Development/projects/synapse-garage/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/synapse-garage/wire/.forge/verify
+context: /home/nogo/Development/projects/synapse-garage/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 18:08:36
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-15: Add config file watcher
+model: sonnet
+
+  Prompt:  62 lines  (3403 bytes)
+  Log:     /home/nogo/Development/projects/synapse-garage/wire/.forge/wu/wu-15.log
+
+  Started: 2026-04-08 18:08:53
+
+  [18:08:58]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:08:58]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/go.mod"}
+  [18:09:01]  ⚙  Glob  {"pattern":"mise.toml","path":"/home/nogo/Development/projects/synapse-garage/wi…
+  [18:09:01]  ⚙  Glob  {"pattern":"internal/config/*_test.go","path":"/home/nogo/Development/projects/s…
+  [18:09:03]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/mise.toml"}
+  [18:09:03]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:10:21]  💬 Now I have everything I need. Let me implement the solution.
+  [18:10:21]  ⚙  Bash  {"command":"go get github.com/fsnotify/fsnotify@latest 2>&1","description":"Add …
+  [18:10:32]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:10:54]  ⚙  Write  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:10:56]  ⚙  Bash  {"command":"go mod tidy 2>&1","description":"Run go mod tidy"}
+  [18:10:59]  ⚙  Bash  {"command":"go test ./internal/config/ -run TestWatch -v -race -count=1 2>&1","d…
+  [18:11:09]  💬 All 5 tests pass. Let me run the full check:
+  [18:11:10]  ⚙  Bash  {"command":"mise run check 2>&1","description":"Run mise check"}
+  [18:12:01]  💬 All tests pass. The only failure is the `tidy` step — it verifies `go.mod`/`go.sum` are committed, which they aren't yet
+
+  [18:12:01]  ✅ Done — tokens: 12 in / 11073 out | cost: $0.3754659000000001
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 18:12:02  (3m 9s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✗ FAILED
+[test] internal/process/manager_test.go:302:8: m.Healthy undefined (type *Manager has no field or method Healthy)
+[test] internal/process/manager_test.go:323:7: m.Healthy undefined (type *Manager has no field or method Healthy)
+[test] internal/process/manager_test.go:418:7: m.Healthy undefined (type *Manager has no field or method Healthy)
+[test] internal/process/manager_test.go:421:8: m.Healthy undefined (type *Manager has no field or method Healthy)
+[test] internal/process/manager_test.go:435:7: m.Healthy undefined (type *Manager has no field or method Healthy)
+[test] internal/process/manager_test.go:438:8: m.Healthy undefined (type *Manager has no field or method Healthy)
+[test] internal/process/manager_test.go:624:8: m.Healthy undefined (type *Manager has no field or method Healthy)
+[test] FAIL	github.com/nogo/wire/cmd/wire [build failed]
+[test] ?   	github.com/nogo/wire/internal	[no test files]
+[test] FAIL	github.com/nogo/wire/internal/cli [build failed]
+[vet] # github.com/nogo/wire/internal/gateway
+[vet] # [github.com/nogo/wire/internal/gateway]
+[vet] vet: internal/gateway/gateway.go:50:25: cannot use mgr (variable of type *process.Manager) as backendManager value in argument to newGateway: *process.Manager does not implement backendManager (missing method Healthy)
+[test] ok  	github.com/nogo/wire/internal/config	4.122s
+[test] FAIL	github.com/nogo/wire/internal/gateway [build failed]
+[test] ok  	github.com/nogo/wire/internal/monitor	2.159s
+[test] FAIL	github.com/nogo/wire/internal/process [build failed]
+[test] FAIL
+Finished in 4.34s
+[fmt:check] ERROR task failed
+
+  ⚠ /home/nogo/Development/projects/synapse-garage/wire/.forge/wu/wu-15.md failed — pausing. Fix and restart, or Ctrl-C to stop.
+
+  ⏹ Ctrl-C received, finishing current work...
+forge runner
+project: /home/nogo/Development/projects/synapse-garage/wire
+queue:   /home/nogo/Development/projects/synapse-garage/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/synapse-garage/wire/.forge/verify
+context: /home/nogo/Development/projects/synapse-garage/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 18:15:13
+
+  Pre-flight verify...
+  Pre-flight: ✗ FAILED — project is not green before any WU ran
+
+[lint] staticcheck not installed, skipping
+[lint] Finished in 4.2ms
+[fmt:check] FAIL: unformatted files:
+[fmt:check] internal/gateway/affinity_test.go
+[fmt:check] internal/gateway/gateway_test.go
+[fmt:check] internal/monitor/hub.go
+[fmt:check] internal/monitor/websocket_test.go
+[fmt:check] internal/process/manager.go
+[tidy] FAIL: go.mod/go.sum updated by tidy — commit the changes
+[vet] Finished in 289.1ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[test] ?   	github.com/nogo/wire/internal	[no test files]
+[test] ok  	github.com/nogo/wire/internal/cli	1.007s
+[test] ok  	github.com/nogo/wire/internal/config	4.123s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.023s
+[test] ok  	github.com/nogo/wire/internal/monitor	2.162s
+[test] ok  	github.com/nogo/wire/internal/process	16.517s
+[test] Finished in 17.44s
+Finished in 17.45s
+[fmt:check] ERROR task failed
+
+  Fix the baseline, then restart the runner.

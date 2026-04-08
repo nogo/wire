@@ -321,8 +321,8 @@ func TestIntegration_SameSystemPrompt_SameSlot(t *testing.T) {
 
 	cfg := testConfig("test/model", 2, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"test/model": backend.URL},
-		healthy: map[string]bool{"test/model": true},
+		addrs:  map[string]string{"test/model": backend.URL},
+		loaded: map[string]bool{"test/model": true},
 	}
 	gw := newGateway(cfg, mgr, nil, slog.Default())
 	gwServer := httptest.NewServer(gw.server.Handler)
@@ -388,8 +388,8 @@ func TestIntegration_Fallback_NoSlotOnHashZero(t *testing.T) {
 
 	cfg := testConfig("test/model", 2, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"test/model": backend.URL},
-		healthy: map[string]bool{"test/model": true},
+		addrs:  map[string]string{"test/model": backend.URL},
+		loaded: map[string]bool{"test/model": true},
 	}
 	gw := newGateway(cfg, mgr, nil, slog.Default())
 	gwServer := httptest.NewServer(gw.server.Handler)

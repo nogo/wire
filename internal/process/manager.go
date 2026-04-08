@@ -22,10 +22,10 @@ import (
 type modelState int
 
 const (
-	stateIdle     modelState = iota // not loaded or failed
-	stateLoading                    // llama-server starting up
-	stateHealthy                    // serving requests
-	stateDraining                   // SIGTERM sent, waiting for exit
+	stateIdle      modelState = iota // not loaded or failed
+	stateLoading                     // llama-server starting up
+	stateLoaded                      // loaded and serving requests
+	stateUnloading                   // unloading: SIGTERM sent, waiting for exit
 )
 
 func (s modelState) String() string {
@@ -34,9 +34,9 @@ func (s modelState) String() string {
 		return "idle"
 	case stateLoading:
 		return "loading"
-	case stateHealthy:
+	case stateLoaded:
 		return "loaded"
-	case stateDraining:
+	case stateUnloading:
 		return "unloading"
 	default:
 		return "unknown"
@@ -120,7 +120,7 @@ func (m *Manager) Snapshot() []monitor.BackendStatus {
 			Model:     ps.modelName,
 			Port:      ps.port,
 			PID:       pid,
-			Healthy:   ps.state == stateHealthy,
+			Loaded:    ps.state == stateLoaded,
 			Status:    ps.state.String(),
 			StartedAt: ps.startedAt,
 			Restarts:  ps.restarts,
@@ -138,7 +138,7 @@ func (m *Manager) RunningModels() []string {
 	var names []string
 	for name, ps := range m.procs {
 		ps.mu.Lock()
-		healthy := ps.state == stateHealthy
+		healthy := ps.state == stateLoaded
 		ps.mu.Unlock()
 		if healthy {
 			names = append(names, name)
@@ -217,8 +217,8 @@ func (m *Manager) Stop() error {
 	return nil
 }
 
-// Healthy reports whether a model's process is ready to serve requests.
-func (m *Manager) Healthy(name string) bool {
+// Loaded reports whether a model's process is ready to serve requests.
+func (m *Manager) Loaded(name string) bool {
 	m.mu.RLock()
 	ps, ok := m.procs[name]
 	m.mu.RUnlock()
@@ -227,7 +227,7 @@ func (m *Manager) Healthy(name string) bool {
 	}
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	return ps.state == stateHealthy
+	return ps.state == stateLoaded
 }
 
 // Addr returns the base URL for a healthy model's process.
@@ -240,7 +240,7 @@ func (m *Manager) Addr(name string) (string, bool) {
 	}
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	if ps.port == 0 || ps.state != stateHealthy {
+	if ps.port == 0 || ps.state != stateLoaded {
 		return "", false
 	}
 	return fmt.Sprintf("http://localhost:%d", ps.port), true
@@ -272,7 +272,7 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 		ps.mu.Unlock()
 
 		switch state {
-		case stateHealthy:
+		case stateLoaded:
 			ps.inflight.Add(1)
 			ps.mu.Lock()
 			ps.lastUsed = time.Now()
@@ -290,7 +290,7 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 			}
 			return m.checkLoaded(modelName)
 
-		case stateDraining:
+		case stateUnloading:
 			m.mu.Unlock()
 			return "", noop, fmt.Errorf("model %q is shutting down", modelName)
 
@@ -315,7 +315,7 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 		port2 := ps2.port
 		ps2.mu.Unlock()
 		switch state2 {
-		case stateHealthy:
+		case stateLoaded:
 			ps2.inflight.Add(1)
 			ps2.mu.Lock()
 			ps2.lastUsed = time.Now()
@@ -385,7 +385,7 @@ func (m *Manager) checkLoaded(modelName string) (addr string, release func(), er
 	port := ps.port
 	ps.mu.Unlock()
 
-	if state != stateHealthy {
+	if state != stateLoaded {
 		if loadErr != nil {
 			return "", noop, fmt.Errorf("model %q load failed: %w", modelName, loadErr)
 		}
@@ -431,7 +431,7 @@ func (m *Manager) evictIfNeeded() error {
 		state := ps.state
 		lu := ps.lastUsed
 		ps.mu.Unlock()
-		if state == stateHealthy && ps.inflight.Load() == 0 {
+		if state == stateLoaded && ps.inflight.Load() == 0 {
 			candidates = append(candidates, candidate{name: name, ps: ps, lastUsed: lu})
 		}
 	}
@@ -445,7 +445,7 @@ func (m *Manager) evictIfNeeded() error {
 
 	victim := candidates[0]
 	victim.ps.mu.Lock()
-	victim.ps.state = stateDraining
+	victim.ps.state = stateUnloading
 	victim.ps.mu.Unlock()
 
 	// Release the manager lock while waiting for the supervisor to exit.
@@ -456,7 +456,7 @@ func (m *Manager) evictIfNeeded() error {
 		Time:    time.Now(),
 		Backend: victim.name,
 		Kind:    monitor.EventModelLoad,
-		Message: "draining (LRU eviction)",
+		Message: "unloading (LRU eviction)",
 	})
 
 	victim.ps.cancel()  // SIGTERM via context cancellation
@@ -494,15 +494,15 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 	m.mu.RUnlock()
 
 	// Ensure state is idle and the ready channel is closed on exit (for any
-	// reason). This unblocks callers waiting in LoadOrGet and lets Healthy()
+	// reason). This unblocks callers waiting in LoadOrGet and lets Loaded()
 	// return false after the supervisor exits.
 	defer func() {
 		ps.wg.Done()
 		ps.mu.Lock()
 		ready := ps.ready
 		ps.ready = nil
-		// Only preserve stateDraining; evictIfNeeded owns that transition.
-		if ps.state != stateDraining {
+		// Only preserve stateUnloading; evictIfNeeded owns that transition.
+		if ps.state != stateUnloading {
 			ps.state = stateIdle
 		}
 		ps.mu.Unlock()
@@ -619,7 +619,7 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 
 		// Transition to healthy and signal all waiters by closing ready.
 		ps.mu.Lock()
-		ps.state = stateHealthy
+		ps.state = stateLoaded
 		if firstLoad {
 			ps.lastUsed = time.Now()
 		}
