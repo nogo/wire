@@ -1,16 +1,12 @@
-`go build ./...` and `go test ./...` both pass. Here's what was done:
+All tests pass. The implementation was already complete. Here's what's in place:
 
-**Created:**
-- `internal/monitor/websocket.go` — WS handler: upgrades connection, sends snapshot, streams hub messages as JSON, discard-goroutine for close detection
-- `internal/monitor/page.go` — `go:embed` + `HandlePage`
-- `internal/monitor/page.html` — dark-theme dashboard using pure DOM APIs (no innerHTML with dynamic data)
-- `internal/monitor/websocket_test.go` — 4 tests: snapshot on connect, metrics forwarded, hub stop closes connection, page handler
+- **`internal/config/config.go`** — `Monitor bool yaml:"monitor"` field (defaults to false)
+- **`internal/monitor/websocket.go`** — WS handler: upgrades, sends snapshot, streams hub messages, discard goroutine for close detection
+- **`internal/monitor/page.go`** — `go:embed page.html` + `HandlePage`
+- **`internal/monitor/page.html`** — single-file dark-theme dashboard with GPU cards, backend cards, slot tables, and request log
+- **`internal/gateway/gateway.go`** — accepts `*monitor.Hub`, registers `/monitor` and `/monitor/ws` when non-nil
+- **`internal/cli/cli.go`** — creates/starts/stops hub in `runStart()` when `cfg.Monitor` is true
+- **`internal/config/config_test.go`** — `TestLoad_MonitorTrue` and `TestLoad_MonitorDefault`
+- **`internal/monitor/websocket_test.go`** — snapshot-on-connect, metrics forwarding, hub-stop closes connection, page handler
 
-**Modified:**
-- `internal/config/config.go` — added `Monitor bool \`yaml:"monitor"\``
-- `internal/config/config_test.go` — added `TestLoad_MonitorTrue` and `TestLoad_MonitorDefault`
-- `internal/monitor/hub.go` — added `Statuses() []BackendStatus` (delegates to `snapshotFn`)
-- `internal/gateway/gateway.go` — `New`/`newGateway` accept `*monitor.Hub`; registers `/monitor` and `/monitor/ws` when non-nil
-- `internal/gateway/gateway_test.go` — updated 7 `newGateway` call sites to pass `nil` hub
-- `internal/cli/cli.go` — creates/starts/stops hub in `runStart()` when `cfg.Monitor` is true
-- `go.mod` — added `nhooyr.io/websocket v1.8.17`
+`go build ./...` and `go test ./...` both pass cleanly.

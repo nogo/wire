@@ -775,3 +775,116 @@ Finished in 9.34s
 [tidy] ERROR task failed
 
   ⚠ /home/nogo/Development/projects/wire/.forge/wu/wu-08.md failed — pausing. Fix and restart, or Ctrl-C to stop.
+
+  ⏹ Ctrl-C received, finishing current work...
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 00:29:37
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-08: Serve live monitor dashboard via websocket
+model: sonnet
+
+  Prompt:  236 lines  (11128 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-08.log
+
+  Started: 2026-04-08 00:29:45
+
+  [00:29:51]  ⚙  Agent  {"description":"Explore wire project structure","subagent_type":"Explore","promp…
+  [00:29:53]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config_test.g…
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go"}
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/event.go"}
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu.go"}
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [00:29:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/go.mod"}
+
+  ⏹ Ctrl-C received, finishing current work...
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 00:30:08  (0m 23s)
+  Status:   ✗ FAILED (exit 130)
+  ─────────────────────────────────────────────────────
+
+  ⚠ /home/nogo/Development/projects/wire/.forge/wu/wu-08.md failed — pausing. Fix and restart, or Ctrl-C to stop.
+
+  ═══════════════════════════════════════════════════════
+  Runner stopped: 0 done, 1 failed, 2 remaining
+  ═══════════════════════════════════════════════════════
+
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 07:54:27
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-08: Serve live monitor dashboard via websocket
+model: sonnet
+
+  Prompt:  236 lines  (11128 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-08.log
+
+  Started: 2026-04-08 07:54:34
+
+  [07:54:41]  ⚙  Agent  {"description":"Explore wire project structure","subagent_type":"Explore","promp…
+  [07:54:43]  ⚙  Bash  {"command":"find /home/nogo/Development/projects/wire -type f -name \"*.go\" -o …
+  [07:54:44]  ⚙  Bash  {"command":"tree /home/nogo/Development/projects/wire -L 3 -I 'vendor|.git|node_…
+  [07:54:53]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/go.mod"}
+  [07:54:54]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [07:54:55]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/event.go"}
+  [07:54:56]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/gpu.go"}
+  [07:54:56]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [07:54:57]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [07:54:58]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go"}
+  [07:54:59]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go"}
+  [07:55:25]  💬 Let me read the existing monitor files that were already created to see what's there and what needs to be done.
+  [07:55:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/websocket.go…
+  [07:55:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/page.go"}
+  [07:55:26]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/websocket_te…
+  [07:55:29]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [07:55:30]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [07:55:30]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [07:55:31]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/cli/cli.go"}
+  [07:55:36]  💬 The core implementation is already done. Let me check what's missing — the HTML page and config tests.
+  [07:55:37]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/page.html","…
+  [07:55:37]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config_test.g…
+  [07:55:42]  💬 All the code is already implemented. Let me run the verification commands.
+  [07:55:42]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [07:55:45]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [07:55:47]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages in wire proje…
+  [07:55:50]  ⚙  Bash  {"command":"go build ./... 2>&1","description":"Build all packages"}
+  [07:55:53]  ⚙  Bash  {"command":"go build ./...","description":"Build all packages from wire project …
+  [07:55:56]  ⚙  Bash  {"command":"go build ./...","description":"Build all packages in wire project"}
+  [07:55:59]  ⚙  Bash  {"command":"go build ./... && echo \"BUILD OK\"","description":"Build all packag…
+  [07:56:01]  ⚙  Bash  {"command":"go test ./... 2>&1 | tail -30","description":"Run all tests"}
+  [07:56:09]  💬 All tests pass. The implementation was already complete. Here's what's in place:
+
+- **`internal/config/config.go`** — `M
+
+  [07:56:09]  ✅ Done — tokens: 3782 in / 2441 out | cost: $0.43857279999999993
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 07:56:09  (1m 35s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✓ all green
