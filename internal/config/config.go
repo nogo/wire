@@ -34,11 +34,16 @@ type Config struct {
 }
 
 type ModelParams struct {
-	Context   int      `yaml:"context"`
-	GPULayers int      `yaml:"gpu_layers"`
-	Slots     int      `yaml:"slots"`
-	Pooling   string   `yaml:"pooling"`
-	Extra     []string `yaml:"extra"`
+	Context    int      `yaml:"context"`
+	GPULayers  int      `yaml:"gpu_layers"`
+	Slots      int      `yaml:"slots"`
+	Pooling    string   `yaml:"pooling"`
+	Extra      []string `yaml:"extra"`
+	SpecType   string   `yaml:"spec_type"`
+	DraftMax   int      `yaml:"draft_max"`
+	DraftMin   int      `yaml:"draft_min"`
+	SpecNgramN int      `yaml:"spec_ngram_n"`
+	SpecNgramM int      `yaml:"spec_ngram_m"`
 }
 
 // MatchModel returns the ModelParams for the first glob pattern in Models that
@@ -114,6 +119,18 @@ func validate(cfg *Config) error {
 	}
 	if len(cfg.Warmup) > cfg.MaxModels {
 		return fmt.Errorf("warmup list length %d exceeds max_models %d", len(cfg.Warmup), cfg.MaxModels)
+	}
+	validSpecTypes := map[string]bool{
+		"ngram-simple":  true,
+		"ngram-mod":     true,
+		"ngram-cache":   true,
+		"ngram-map-k":   true,
+		"ngram-map-k4v": true,
+	}
+	for pattern, p := range cfg.Models {
+		if p.SpecType != "" && !validSpecTypes[p.SpecType] {
+			return fmt.Errorf("model pattern %q: invalid spec_type %q (valid: ngram-simple, ngram-mod, ngram-cache, ngram-map-k, ngram-map-k4v)", pattern, p.SpecType)
+		}
 	}
 	return nil
 }

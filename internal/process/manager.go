@@ -753,9 +753,23 @@ func buildArgs(modelName string, params config.ModelParams) []string {
 	if params.Pooling != "" {
 		args = append(args, "--embedding", "--pooling", params.Pooling)
 	}
+	if params.SpecType != "" {
+		args = append(args, "--spec-type", params.SpecType)
+	}
+	if params.DraftMax > 0 {
+		args = append(args, "--draft-max", strconv.Itoa(params.DraftMax))
+	}
+	if params.DraftMin > 0 {
+		args = append(args, "--draft-min", strconv.Itoa(params.DraftMin))
+	}
+	if params.SpecNgramN > 0 {
+		args = append(args, "--spec-ngram-size-n", strconv.Itoa(params.SpecNgramN))
+	}
+	if params.SpecNgramM > 0 {
+		args = append(args, "--spec-ngram-size-m", strconv.Itoa(params.SpecNgramM))
+	}
 	return append(args, params.Extra...)
 }
-
 
 // waitHealthy polls GET /health on the given port every second until it
 // returns 200 OK, the context is cancelled, or the timeout elapses.

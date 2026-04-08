@@ -1,0 +1,12 @@
+All checks pass. Here's what was changed:
+
+**`internal/config/config.go`**
+- Added 5 fields to `ModelParams`: `SpecType`, `DraftMax`, `DraftMin`, `SpecNgramN`, `SpecNgramM`
+- Added validation in `validate()` rejecting unknown `SpecType` values at load time
+
+**`internal/process/manager.go`**
+- Added 5 conditional flag appends in `buildArgs` after the `Pooling` block, before `Extra`
+
+**`internal/config/config_test.go`** — 3 new tests: `TestLoad_SpecType`, `TestLoad_SpecTypeInvalid`, `TestLoad_SpecTypeEmpty`
+
+**`internal/process/manager_test.go`** — 3 new tests: `TestBuildArgs_speculative`, `TestBuildArgs_speculative_empty`, `TestBuildArgs_speculative_partial`

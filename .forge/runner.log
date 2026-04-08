@@ -2572,3 +2572,122 @@ model: sonnet
   ⏳ Waiting for work units... (12:25:00)
 
   ⏹ Ctrl-C received, finishing current work...
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 13:56:33
+
+  Pre-flight verify...
+  Pre-flight: ✗ FAILED — project is not green before any WU ran
+
+[lint] $ if command -v staticcheck >/dev/null 2>&1; then
+[fmt:check] $ UNFORMATTED=$(gofmt -l .)
+[lint] staticcheck not installed, skipping
+[lint] Finished in 2.6ms
+[fmt:check] FAIL: unformatted files:
+[fmt:check] internal/cli/cli.go
+[fmt:check] internal/monitor/parser.go
+[fmt:check] internal/process/manager.go
+[tidy] Finished in 31.5ms
+[vet] Finished in 281.8ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[test] ?   	github.com/nogo/wire/internal	[no test files]
+[test] ok  	github.com/nogo/wire/internal/cli	1.007s
+[test] ok  	github.com/nogo/wire/internal/config	1.008s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.017s
+[test] ok  	github.com/nogo/wire/internal/monitor	2.161s
+[test] ok  	github.com/nogo/wire/internal/process	16.506s
+[test] Finished in 17.30s
+Finished in 17.31s
+[fmt:check] ERROR task failed
+
+  Fix the baseline, then restart the runner.
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 13:57:21
+
+  Pre-flight verify...
+  Pre-flight: ✗ FAILED — project is not green before any WU ran
+
+[vet] sources up-to-date, skipping
+[lint] sources up-to-date, skipping
+[test] $ go test -race -count=1 ./...
+[fmt:check] $ UNFORMATTED=$(gofmt -l .)
+[tidy] $ go mod tidy
+[fmt:check] FAIL: unformatted files:
+[fmt:check] internal/cli/cli.go
+[fmt:check] internal/monitor/parser.go
+[fmt:check] internal/process/manager.go
+[tidy] Finished in 26.2ms
+[test] ?   	github.com/nogo/wire/cmd/wire	[no test files]
+[test] ?   	github.com/nogo/wire/internal	[no test files]
+[test] ok  	github.com/nogo/wire/internal/cli	1.007s
+[test] ok  	github.com/nogo/wire/internal/config	1.011s
+[test] ok  	github.com/nogo/wire/internal/gateway	1.018s
+[test] ok  	github.com/nogo/wire/internal/monitor	2.164s
+[test] ok  	github.com/nogo/wire/internal/process	16.499s
+[test] Finished in 16.86s
+Finished in 16.87s
+[fmt:check] ERROR task failed
+
+  Fix the baseline, then restart the runner.
+forge runner
+project: /home/nogo/Development/projects/wire
+queue:   /home/nogo/Development/projects/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/wire/.forge/verify
+context: /home/nogo/Development/projects/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 13:58:16
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-12: Add speculative decoding config fields
+model: sonnet
+
+  Prompt:  98 lines  (4917 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-12.log
+
+  Started: 2026-04-08 13:58:33
+
+  [13:58:39]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config.go"}
+  [13:58:40]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager.go",…
+  [13:58:42]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/config/config_test.g…
+  [13:58:42]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/process/manager_test…
+  [13:58:46]  💬 Now I'll make all four changes in parallel.
+  [13:58:49]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [13:58:56]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [13:59:01]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [13:59:04]  💬 Now add the config tests and buildArgs tests:
+  [13:59:10]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [13:59:20]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [13:59:22]  ⚙  Bash  {"command":"go test -run \"TestBuildArgs|TestLoad\" ./internal/config/... ./inte…
+  [13:59:36]  💬 All tests pass. Let me also run the full check:
+  [13:59:37]  ⚙  Bash  {"command":"mise run check 2>&1","description":"Run mise check"}
+  [13:59:57]  ⚙  Bash  {"command":"gofmt -w /home/nogo/Development/projects/wire/internal/config/config…
+  [13:59:59]  ⚙  Bash  {"command":"mise run check 2>&1","description":"Run mise check again"}
+  [14:00:20]  💬 All checks pass. Here's what was changed:
+
+**`internal/config/config.go`**
+- Added 5 fields to `ModelParams`: `SpecType`
+
+  [14:00:20]  ✅ Done — tokens: 14 in / 3690 out | cost: $0.25566510000000003
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 14:00:21  (1m 48s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✓ all green

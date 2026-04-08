@@ -338,6 +338,63 @@ models:
 	}
 }
 
+func TestLoad_SpecType(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/model":
+    spec_type: "ngram-mod"
+    draft_max: 16
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := cfg.Models["org/model"]
+	if p.SpecType != "ngram-mod" {
+		t.Errorf("spec_type: got %q, want %q", p.SpecType, "ngram-mod")
+	}
+	if p.DraftMax != 16 {
+		t.Errorf("draft_max: got %d, want 16", p.DraftMax)
+	}
+}
+
+func TestLoad_SpecTypeInvalid(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/model":
+    spec_type: "unknown"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !contains(err.Error(), "unknown") {
+		t.Errorf("error should mention invalid value, got: %v", err)
+	}
+}
+
+func TestLoad_SpecTypeEmpty(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/model":
+    context: 2048
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := cfg.Models["org/model"]
+	if p.SpecType != "" || p.DraftMax != 0 || p.DraftMin != 0 || p.SpecNgramN != 0 || p.SpecNgramM != 0 {
+		t.Errorf("expected zero spec fields, got: %+v", p)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		func() bool {

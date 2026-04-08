@@ -1,0 +1,21 @@
+version: 2
+
+builds:
+  - main: ./cmd/wire
+    binary: wire
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X github.com/nogo/wire/internal.Version={{.Version}}
+      - -X github.com/nogo/wire/internal.Commit={{.Commit}}
+      - -X github.com/nogo/wire/internal.BuildDate={{.Date}}
+
+archives:
+  - formats:
+      - tar.gz
+
+changelog:
+  sort: asc

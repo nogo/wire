@@ -17,8 +17,8 @@ var (
 	// "prompt eval time" lines are never reached here.
 	reGenEval = regexp.MustCompile(
 		`\beval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens\s*\([^,]+,\s*([\d.]+)\s*tokens(?:/s| per second)\)`)
-	reSlotProc = regexp.MustCompile(`slot\s+(?:(\d+)\s+is\s+processing|launch_slot_:\s+id\s+(\d+)\s+\|.*\|\s+processing task)`)
-	reSlotRel  = regexp.MustCompile(`slot\s+(?:(\d+)\s+released|release:\s+id\s+(\d+)\s+\|.*\|\s+stop processing)`)
+	reSlotProc  = regexp.MustCompile(`slot\s+(?:(\d+)\s+is\s+processing|launch_slot_:\s+id\s+(\d+)\s+\|.*\|\s+processing task)`)
+	reSlotRel   = regexp.MustCompile(`slot\s+(?:(\d+)\s+released|release:\s+id\s+(\d+)\s+\|.*\|\s+stop processing)`)
 	reModelLoad = regexp.MustCompile(`load_tensors:\s+offloading\s+(\d+)\s+(?:repeating\s+)?layers\s+to\s+GPU`)
 	reVRAMAlloc = regexp.MustCompile(`load_tensors:\s+\S+\s+(?:model\s+)?buffer\s+size\s*=\s*([\d.]+)\s*MiB`)
 	reListen    = regexp.MustCompile(`server is listening on http://[\d.]+:(\d+)`)

@@ -189,6 +189,61 @@ func TestBuildArgs_full(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_speculative(t *testing.T) {
+	params := config.ModelParams{
+		SpecType:   "ngram-mod",
+		DraftMax:   16,
+		DraftMin:   2,
+		SpecNgramN: 4,
+		SpecNgramM: 3,
+	}
+	got := buildArgs("org/model", params)
+	want := []string{
+		"-hf", "org/model",
+		"--port", "0",
+		"--no-webui",
+		"--metrics",
+		"--parallel", "1",
+		"--spec-type", "ngram-mod",
+		"--draft-max", "16",
+		"--draft-min", "2",
+		"--spec-ngram-size-n", "4",
+		"--spec-ngram-size-m", "3",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("buildArgs speculative: got %v, want %v", got, want)
+	}
+}
+
+func TestBuildArgs_speculative_empty(t *testing.T) {
+	params := config.ModelParams{}
+	args := buildArgs("org/model", params)
+	specFlags := []string{"--spec-type", "--draft-max", "--draft-min", "--spec-ngram-size-n", "--spec-ngram-size-m"}
+	for _, f := range specFlags {
+		for _, a := range args {
+			if a == f {
+				t.Errorf("unexpected spec flag %q in args: %v", f, args)
+			}
+		}
+	}
+}
+
+func TestBuildArgs_speculative_partial(t *testing.T) {
+	params := config.ModelParams{SpecType: "ngram-mod"}
+	got := buildArgs("org/model", params)
+	want := []string{
+		"-hf", "org/model",
+		"--port", "0",
+		"--no-webui",
+		"--metrics",
+		"--parallel", "1",
+		"--spec-type", "ngram-mod",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("buildArgs speculative partial: got %v, want %v", got, want)
+	}
+}
+
 func TestBuildArgs_zeroGPULayersOmitted(t *testing.T) {
 	params := config.ModelParams{GPULayers: 0, Context: 0}
 	args := buildArgs("org/model", params)
