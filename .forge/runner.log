@@ -2923,3 +2923,43 @@ Finished in 17.45s
 [fmt:check] ERROR task failed
 
   Fix the baseline, then restart the runner.
+forge runner
+project: /home/nogo/Development/projects/synapse-garage/wire
+queue:   /home/nogo/Development/projects/synapse-garage/wire/.forge/wu
+model:   sonnet
+verify:  /home/nogo/Development/projects/synapse-garage/wire/.forge/verify
+context: /home/nogo/Development/projects/synapse-garage/wire/.forge/context.md
+poll:    5s
+date:    2026-04-08 18:17:35
+
+  Pre-flight verify...
+  Pre-flight: ✓ baseline green
+
+  Ctrl-C to stop gracefully
+
+wu-15: Add config file watcher
+model: sonnet
+
+  Prompt:  62 lines  (3403 bytes)
+  Log:     /home/nogo/Development/projects/synapse-garage/wire/.forge/wu/wu-15.log
+
+  Started: 2026-04-08 18:17:52
+
+  [18:17:57]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:17:57]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/go.mod"}
+  [18:18:00]  ⚙  Glob  {"pattern":"internal/config/*","path":"/home/nogo/Development/projects/synapse-g…
+  [18:18:02]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:18:02]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:18:05]  💬 Both files already exist and look complete. Let me verify the tests pass.
+  [18:18:06]  ⚙  Bash  {"command":"go test ./internal/config/ -run TestWatch -v 2>&1","description":"Ru…
+  [18:18:11]  ⚙  Bash  {"command":"mise run check 2>&1","description":"Run mise check"}
+  [18:18:30]  💬 All 5 `TestWatch_*` tests pass and `mise run check` is green. The implementation was already complete — `watch.go` and `
+
+  [18:18:30]  ✅ Done — tokens: 8 in / 755 out | cost: $0.09418364999999998
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 18:18:30  (0m 38s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✓ all green
