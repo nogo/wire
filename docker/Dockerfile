@@ -14,7 +14,7 @@ ENV PATH="/root/.local/bin:${PATH}"
 
 WORKDIR /src/wire
 COPY mise.toml go.mod go.sum ./
-RUN mise install && mise run -- go mod download
+RUN mise trust && mise install && mise run -- go mod download
 COPY . .
 RUN CGO_ENABLED=0 mise run build && strip bin/wire
 
