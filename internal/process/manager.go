@@ -426,10 +426,15 @@ func (m *Manager) launch(ctx context.Context, name string, b config.Backend, por
 
 // buildArgs constructs the llama-server command-line arguments from a Backend config.
 func buildArgs(b config.Backend, port int) []string {
+	slots := b.Slots
+	if slots <= 0 {
+		slots = 1
+	}
 	args := []string{
 		"-hf", b.Model,
 		"--port", strconv.Itoa(port),
 		"--no-webui",
+		"--parallel", strconv.Itoa(slots),
 	}
 	if b.GPULayers > 0 {
 		args = append(args, "-ngl", strconv.Itoa(b.GPULayers))

@@ -206,6 +206,30 @@ monitor: true
 	}
 }
 
+func TestLoad_SlotsField(t *testing.T) {
+	path := writeConfig(t, `
+backends:
+  multi:
+    model: "some/model"
+    slots: 4
+  single:
+    model: "other/model"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Backends["multi"].Slots != 4 {
+		t.Errorf("multi.slots: got %d, want 4", cfg.Backends["multi"].Slots)
+	}
+	// Unset slots should default to 1.
+	if cfg.Backends["single"].Slots != 1 {
+		t.Errorf("single.slots default: got %d, want 1", cfg.Backends["single"].Slots)
+	}
+}
+
 func TestLoad_MonitorDefault(t *testing.T) {
 	path := writeConfig(t, `
 backends:

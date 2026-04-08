@@ -96,7 +96,7 @@ func newTestManager(cfg *config.Config) *Manager {
 func TestBuildArgs_minimal(t *testing.T) {
 	b := config.Backend{Model: "org/model"}
 	got := buildArgs(b, 19100)
-	want := []string{"-hf", "org/model", "--port", "19100", "--no-webui"}
+	want := []string{"-hf", "org/model", "--port", "19100", "--no-webui", "--parallel", "1"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("buildArgs minimal: got %v, want %v", got, want)
 	}
@@ -107,6 +107,7 @@ func TestBuildArgs_full(t *testing.T) {
 		Model:     "org/model",
 		GPULayers: 32,
 		Context:   4096,
+		Slots:     4,
 		Pooling:   "mean",
 		Extra:     []string{"--flash-attn"},
 	}
@@ -115,6 +116,7 @@ func TestBuildArgs_full(t *testing.T) {
 		"-hf", "org/model",
 		"--port", "19101",
 		"--no-webui",
+		"--parallel", "4",
 		"-ngl", "32",
 		"-c", "4096",
 		"--embedding", "--pooling", "mean",

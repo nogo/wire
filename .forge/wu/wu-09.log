@@ -1,0 +1,14 @@
+All tests pass. Here's a summary of what was implemented:
+
+**Created:**
+- `internal/gateway/affinity.go` — `affinityTable` with concurrent-safe `Assign()`, FNV-1a `prefixHash()` (system prompt → first user message fallback), and `injectSlot()` for lightweight JSON injection.
+- `internal/gateway/affinity_test.go` — full test coverage: hash stability, different prompts, fallback to user message, parse errors, slot assignment, LRU eviction, concurrent safety, JSON injection edge cases, and two end-to-end integration tests.
+
+**Modified:**
+- `internal/config/config.go` — added `Slots int yaml:"slots"` to `Backend`; `applyDefaults()` sets it to 1 when unset.
+- `internal/config/config_test.go` — added `TestLoad_SlotsField` covering explicit slots and default.
+- `internal/process/manager.go` — `buildArgs()` always passes `--parallel N` using `Backend.Slots` (defaulting to 1).
+- `internal/process/manager_test.go` — updated `TestBuildArgs_minimal` and `TestBuildArgs_full` to expect `--parallel` in output.
+- `internal/gateway/gateway.go` — added `affinity *affinityTable` to `Gateway`; in `handleRoute()`, reads full body, computes prefix hash, injects `id_slot` for managed backends before proxying. Falls through silently on any error.
+
+Key design decision: affinity injection is restricted to managed backends (`IsManaged()` check), since `id_slot` is a llama-server-specific field that external backends (OpenAI, Anthropic, Ollama) don't support.

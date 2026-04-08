@@ -27,11 +27,12 @@ type backendManager interface {
 
 // Gateway is an HTTP reverse-proxy that routes OpenAI-compatible requests to backends.
 type Gateway struct {
-	cfg    *config.Config
-	mgr    backendManager
-	log    *slog.Logger
-	rt     *routeTable
-	server *http.Server
+	cfg      *config.Config
+	mgr      backendManager
+	log      *slog.Logger
+	rt       *routeTable
+	affinity *affinityTable
+	server   *http.Server
 }
 
 // New creates a Gateway backed by the given process manager.
@@ -41,7 +42,7 @@ func New(cfg *config.Config, mgr *process.Manager, hub *monitor.Hub, log *slog.L
 }
 
 func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, log *slog.Logger) *Gateway {
-	g := &Gateway{cfg: cfg, mgr: mgr, log: log, rt: buildRouteTable(cfg)}
+	g := &Gateway{cfg: cfg, mgr: mgr, log: log, rt: buildRouteTable(cfg), affinity: newAffinityTable(cfg.Backends)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", g.handleRoute)
@@ -123,6 +124,21 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	backend := g.cfg.Backends[backendName]
+
+	// Slot affinity: only applies to managed (llama-server) backends that support id_slot.
+	// Read full body, compute prefix hash, inject id_slot if assigned.
+	// On any error, fall through with the original body unchanged.
+	// TODO: emit EventSlotAffinity to monitor hub once hub supports gateway events.
+	if backend.IsManaged() {
+		if allBody, readErr := io.ReadAll(r.Body); readErr == nil {
+			hash := prefixHash(allBody)
+			if slotID, assigned := g.affinity.Assign(backendName, hash); assigned {
+				allBody = injectSlot(allBody, slotID)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(allBody))
+			r.ContentLength = int64(len(allBody))
+		}
+	}
 	if backend.Provider == "anthropic" {
 		g.handleAnthropicProxy(w, r, backendName, backend, addr)
 		return

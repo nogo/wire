@@ -55,6 +55,7 @@ type Backend struct {
 	Model     string   `yaml:"model"`      // HuggingFace ref, e.g. "Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M"
 	Context   int      `yaml:"context"`    // Context window size
 	GPULayers int      `yaml:"gpu_layers"` // -ngl flag
+	Slots     int      `yaml:"slots"`      // Number of parallel slots (--parallel). Default: 1.
 	Pooling   string   `yaml:"pooling"`    // "mean", "cls", "rank" — triggers --embedding flag
 	Extra     []string `yaml:"extra"`      // Additional llama-server flags
 
@@ -117,6 +118,9 @@ func applyDefaults(cfg *Config) {
 	for name, b := range cfg.Backends {
 		if b.Provider == "" {
 			b.Provider = "openai"
+		}
+		if b.Slots == 0 {
+			b.Slots = 1
 		}
 		cfg.Backends[name] = b
 	}
