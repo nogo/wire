@@ -1,0 +1,9 @@
+All checks pass. Here's what was added to `runUp()` in `cli.go`:
+
+1. **Watcher startup** — `config.Watch(bgCtx, ...)` called after the gateway goroutine starts. Failure is a warn-and-continue (best-effort).
+
+2. **Nil channel safety** — `var reloadCh <-chan *config.Config` declared explicitly so a failed watch leaves it nil (select case never fires).
+
+3. **Reload select case** — reads from `reloadCh`, guards against closed channel (`ok == false` or nil config), then warns on `Listen`/`Monitor` changes, logs success, and calls `mgr.Reload` + `gw.UpdateConfig`. Updates `cfg` so subsequent reloads compare against the current running config.
+
+4. **Goroutine lifecycle** — the watcher goroutine is driven by `bgCtx`, which is cancelled during shutdown, so no leak.

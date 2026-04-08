@@ -3036,3 +3036,42 @@ model: sonnet
 
   Running full test suite...
   Tests:    ✓ all green
+  Commit:   ✓ 07295e3  wu-16: Add Manager.Reload for selective restart
+  Changes:   13 files changed, 537 insertions(+), 4 deletions(-)
+  Moved:    → .forge/done/wu-16.md
+  ─────────────────────────────────────────────────────
+
+
+wu-17: Wire config watcher into CLI startup
+model: sonnet
+
+  Prompt:  56 lines  (3067 bytes)
+  Log:     /home/nogo/Development/projects/synapse-garage/wire/.forge/wu/wu-17.log
+
+  Started: 2026-04-08 18:25:06
+
+  [18:25:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/cli/c…
+  [18:25:11]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/synapse-garage/wire/internal/confi…
+  [18:25:14]  💬 Now let me check the manager's Reload and gateway's UpdateConfig signatures:
+  [18:25:14]  ⚙  Grep  {"pattern":"func.*Reload\\|func.*UpdateConfig","path":"/home/nogo/Development/pr…
+  [18:25:17]  ⚙  Grep  {"pattern":"Reload\\|UpdateConfig","path":"/home/nogo/Development/projects/synap…
+  [18:25:20]  ⚙  Bash  {"command":"grep -rn \"Reload\\|UpdateConfig\" /home/nogo/Development/projects/s…
+  [18:25:23]  💬 Now let me check the config struct for the `listen` and `monitor` field names:
+  [18:25:24]  ⚙  Grep  {"pattern":"Listen\\|Monitor\\|MaxModels","path":"/home/nogo/Development/project…
+  [18:25:26]  ⚙  Bash  {"command":"grep -rn \"Listen\\|Monitor\\|MaxModels\" /home/nogo/Development/pro…
+  [18:25:29]  💬 I have everything I need. Now I'll implement the changes to `cli.go`:
+  [18:25:42]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/synapse-garage…
+  [18:25:45]  💬 Now let's run the checks:
+  [18:25:45]  ⚙  Bash  {"command":"mise run check 2>&1","timeout":60000}
+  [18:26:17]  💬 All checks pass. Here's what was added to `runUp()` in `cli.go`:
+
+1. **Watcher startup** — `config.Watch(bgCtx, ...)` ca
+
+  [18:26:17]  ✅ Done — tokens: 11 in / 2497 out | cost: $0.14583195
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 18:26:17  (1m 11s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✓ all green

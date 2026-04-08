@@ -85,6 +85,13 @@ func runUp() error {
 	gwErrCh := make(chan error, 1)
 	go func() { gwErrCh <- gw.ListenAndServe(shutCtx) }()
 
+	var reloadCh <-chan *config.Config
+	if ch, err := config.Watch(bgCtx, slog.Default()); err != nil {
+		slog.Warn("config watcher unavailable", "err", err)
+	} else {
+		reloadCh = ch
+	}
+
 	slog.Info("wire ready", "listen", cfg.Listen, "version", internal.Version, "commit", internal.Commit)
 
 	for {
@@ -107,6 +114,22 @@ func runUp() error {
 			}
 			bgCancel()
 			return mgr.Stop()
+
+		case newCfg, ok := <-reloadCh:
+			if !ok || newCfg == nil {
+				reloadCh = nil
+				continue
+			}
+			if newCfg.Listen != cfg.Listen {
+				slog.Warn("listen address change requires restart")
+			}
+			if newCfg.Monitor != cfg.Monitor {
+				slog.Warn("monitor setting change requires restart")
+			}
+			slog.Info("config reloaded")
+			mgr.Reload(newCfg)
+			gw.UpdateConfig(newCfg)
+			cfg = newCfg
 		}
 	}
 }
