@@ -1,0 +1,37 @@
+# --- llama-server (official ROCm build) ---
+FROM ghcr.io/ggml-org/llama.cpp:server-rocm AS llama-server
+
+# --- wire build ---
+FROM docker.io/library/debian:trixie-slim AS wire-build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+SHELL ["/bin/bash", "-c"]
+RUN curl -fsSL https://mise.jdx.dev/install.sh | bash
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /src/wire
+COPY mise.toml go.mod go.sum ./
+RUN mise install && mise run -- go mod download
+COPY . .
+RUN CGO_ENABLED=0 mise run build && strip bin/wire
+
+# --- runtime ---
+FROM docker.io/rocm/dev-ubuntu-24.04:7.1-complete
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates libcurl4 libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -s /usr/sbin/nologin -d /nonexistent wire
+
+COPY --from=llama-server /usr/local/bin/llama-server /usr/local/bin/llama-server
+COPY --from=llama-server /usr/lib/ /usr/lib/
+COPY --from=wire-build /src/wire/bin/wire /usr/local/bin/wire
+
+USER wire
+EXPOSE 9480
+
+ENTRYPOINT ["wire"]
+CMD ["up"]

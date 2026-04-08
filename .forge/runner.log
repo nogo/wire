@@ -2747,3 +2747,41 @@ model: sonnet
 
   Running full test suite...
   Tests:    ✓ all green
+  Commit:   ✓ c3b8993  wu-13: Add context window guard to gateway
+  Changes:   13 files changed, 440 insertions(+)
+  Moved:    → .forge/done/wu-13.md
+  ─────────────────────────────────────────────────────
+
+  ⏳ Waiting for work units... (14:05:17)
+  ⏳ Waiting for work units... (14:05:22)
+  ⏳ Waiting for work units... (14:05:27)
+  ⏳ Waiting for work units... (14:05:32)
+  ⏳ Waiting for work units... (14:05:37)
+  ⏳ Waiting for work units... (14:05:42)
+  ⏳ Waiting for work units... (14:05:47)
+  ⏳ Waiting for work units... (14:05:52)
+  ⏳ Waiting for work units... (14:05:57)
+  ⏳ Waiting for work units... (14:06:02)
+  ⏳ Waiting for work units... (14:06:07)
+  ⏳ Waiting for work units... (14:06:12)
+  ⏳ Waiting for work units... (14:06:17)
+  ⏳ Waiting for work units... (14:06:22)
+  ⏳ Waiting for work units... (14:06:27)
+  ⏳ Waiting for work units... (14:06:32)
+  ⏳ Waiting for work units... (14:06:37)
+  ⏳ Waiting for work units... (14:06:42)
+  ⏳ Waiting for work units... (14:06:47)
+  ⏳ Waiting for work units... (14:06:52)
+  ⏳ Waiting for work units... (14:06:57)
+  ⏳ Waiting for work units... (14:07:02)
+  ⏳ Waiting for work units... (14:07:07)
+  ⏳ Waiting for work units... (14:07:12)
+  ⏳ Waiting for work units... (14:07:17)
+  ⏳ Waiting for work units... (14:07:22)
+  ⏳ Waiting for work units... (14:07:27)
+  ⏳ Waiting for work units... (14:07:32)
+  ⏳ Waiting for work units... (14:07:37)
+  ⏳ Waiting for work units... (14:07:42)
+  ⏳ Waiting for work units... (14:07:47)
+
+  ⏹ Ctrl-C received, finishing current work...
