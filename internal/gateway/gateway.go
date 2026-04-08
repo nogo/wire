@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,11 @@ import (
 	"github.com/nogo/wire/internal/monitor"
 	"github.com/nogo/wire/internal/process"
 )
+
+// nctxProvider wraps the NCtx lookup; *monitor.Hub satisfies this interface.
+type nctxProvider interface {
+	NCtx(model string) int
+}
 
 // backendManager is the subset of process.Manager the Gateway depends on.
 type backendManager interface {
@@ -34,6 +40,7 @@ type Gateway struct {
 	mgr      backendManager
 	log      *slog.Logger
 	affinity *affinityTable
+	hub      nctxProvider
 	server   *http.Server
 }
 
@@ -53,6 +60,11 @@ func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, log *s
 	}
 
 	g := &Gateway{cfg: cfg, mgr: mgr, log: log, affinity: newAffinityTable(modelSlots)}
+	// Store hub as nctxProvider nil-safely: a nil *monitor.Hub must not become
+	// a non-nil interface value, which would cause g.hub == nil checks to fail.
+	if hub != nil {
+		g.hub = hub
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", g.handleRoute)
@@ -133,6 +145,21 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
+	// Context window guard: reject requests that would exceed 90% of n_ctx.
+	// Best-effort: skipped when hub is nil, n_ctx is unknown, or estimation fails.
+	if g.hub != nil {
+		if nCtx := g.hub.NCtx(payload.Model); nCtx > 0 {
+			if est := estimateTokens(captured.Bytes()); est > 0 {
+				if est > nCtx*9/10 {
+					writeError(w, http.StatusBadRequest, "invalid_request_error",
+						fmt.Sprintf("estimated %d tokens exceeds context window of %d (n_ctx)", est, nCtx),
+						"context_length_exceeded")
+					return
+				}
+			}
+		}
+	}
+
 	// Register affinity entry for the newly loaded model (idempotent for warmup models).
 	g.affinity.Register(payload.Model, params.Slots)
 
@@ -208,6 +235,57 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
 	json.NewEncoder(w).Encode(map[string]string{"status": "degraded"}) //nolint:errcheck
+}
+
+// estimateTokens approximates the token count of a request body using a
+// chars/4 heuristic. It extracts text from messages[].content (chat) and the
+// input field (embeddings). Returns 0 on parse failure or empty content.
+func estimateTokens(body []byte) int {
+	var req struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return 0
+	}
+
+	total := 0
+	for _, msg := range req.Messages {
+		if len(msg.Content) == 0 {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(msg.Content, &s); err == nil {
+			total += len(s)
+			continue
+		}
+		var parts []struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(msg.Content, &parts); err == nil {
+			for _, p := range parts {
+				total += len(p.Text)
+			}
+		}
+	}
+
+	if len(req.Input) > 0 {
+		var s string
+		if err := json.Unmarshal(req.Input, &s); err == nil {
+			total += len(s)
+		} else {
+			var arr []string
+			if err := json.Unmarshal(req.Input, &arr); err == nil {
+				for _, s := range arr {
+					total += len(s)
+				}
+			}
+		}
+	}
+
+	return total / 4
 }
 
 // writeError writes an OpenAI-format JSON error response.

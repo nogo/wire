@@ -293,6 +293,148 @@ func TestGateway_Models(t *testing.T) {
 	}
 }
 
+// mockHub implements nctxProvider for tests.
+type mockHub struct {
+	nctx map[string]int
+}
+
+func (m *mockHub) NCtx(model string) int {
+	return m.nctx[model]
+}
+
+func TestHandleRoute_contextGuard_reject(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"org/model","choices":[]}`)) //nolint:errcheck
+	}))
+	defer backend.Close()
+
+	cfg := testConfig("org/model", 1, backend.URL)
+	mgr := &mockManager{
+		addrs:   map[string]string{"org/model": backend.URL},
+		healthy: map[string]bool{"org/model": true},
+	}
+	g := newGateway(cfg, mgr, nil, slog.Default())
+	g.hub = &mockHub{nctx: map[string]int{"org/model": 100}}
+
+	// 400 chars of content → 100 estimated tokens > 90% of 100 (threshold = 90).
+	longContent := strings.Repeat("x", 400)
+	body := `{"model":"org/model","messages":[{"role":"user","content":"` + longContent + `"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	g.handleRoute(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj["code"] != "context_length_exceeded" {
+		t.Errorf("error code = %v, want context_length_exceeded", errObj["code"])
+	}
+}
+
+func TestHandleRoute_contextGuard_pass(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"org/model","choices":[]}`)) //nolint:errcheck
+	}))
+	defer backend.Close()
+
+	cfg := testConfig("org/model", 1, backend.URL)
+	mgr := &mockManager{
+		addrs:   map[string]string{"org/model": backend.URL},
+		healthy: map[string]bool{"org/model": true},
+	}
+	g := newGateway(cfg, mgr, nil, slog.Default())
+	g.hub = &mockHub{nctx: map[string]int{"org/model": 100}}
+
+	// "hello" = 5 chars → 1 estimated token, well below threshold of 90.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/model","messages":[{"role":"user","content":"hello"}]}`))
+	g.handleRoute(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
+func TestHandleRoute_contextGuard_noHub(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"org/model","choices":[]}`)) //nolint:errcheck
+	}))
+	defer backend.Close()
+
+	cfg := testConfig("org/model", 1, backend.URL)
+	mgr := &mockManager{
+		addrs:   map[string]string{"org/model": backend.URL},
+		healthy: map[string]bool{"org/model": true},
+	}
+	// hub is nil — large requests must pass through unchanged.
+	g := newGateway(cfg, mgr, nil, slog.Default())
+
+	longContent := strings.Repeat("x", 10000)
+	body := `{"model":"org/model","messages":[{"role":"user","content":"` + longContent + `"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	g.handleRoute(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (guard must not fire when hub is nil)", w.Code)
+	}
+}
+
+func TestEstimateTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			name: "chat single string content",
+			body: `{"messages":[{"role":"user","content":"` + strings.Repeat("a", 400) + `"}]}`,
+			want: 100, // 400 chars / 4
+		},
+		{
+			name: "chat array content",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":"` + strings.Repeat("b", 200) + `"}]}]}`,
+			want: 50, // 200 chars / 4
+		},
+		{
+			name: "embeddings string input",
+			body: `{"model":"embed","input":"` + strings.Repeat("c", 80) + `"}`,
+			want: 20, // 80 chars / 4
+		},
+		{
+			name: "embeddings array input",
+			body: `{"model":"embed","input":["` + strings.Repeat("d", 40) + `","` + strings.Repeat("e", 40) + `"]}`,
+			want: 20, // 80 chars / 4
+		},
+		{
+			name: "invalid json",
+			body: `not json`,
+			want: 0,
+		},
+		{
+			name: "empty messages",
+			body: `{"messages":[]}`,
+			want: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := estimateTokens([]byte(tc.body)); got != tc.want {
+				t.Errorf("estimateTokens = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGateway_Models_Empty(t *testing.T) {
 	cfg := &config.Config{Listen: ":0", Models: map[string]config.ModelParams{}}
 	g := newGateway(cfg, &mockManager{}, nil, slog.Default())

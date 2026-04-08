@@ -153,6 +153,35 @@ func TestHub_Snapshot(t *testing.T) {
 	}
 }
 
+func TestHub_NCtx(t *testing.T) {
+	h := &Hub{
+		metrics: map[string]*BackendMetrics{
+			"mymodel": {Name: "mymodel", Slots: []Slot{{NCtx: 4096}}},
+		},
+	}
+	if got := h.NCtx("mymodel"); got != 4096 {
+		t.Errorf("NCtx = %d, want 4096", got)
+	}
+}
+
+func TestHub_NCtx_unknown(t *testing.T) {
+	h := &Hub{metrics: map[string]*BackendMetrics{}}
+	if got := h.NCtx("nonexistent"); got != 0 {
+		t.Errorf("NCtx = %d, want 0", got)
+	}
+}
+
+func TestHub_NCtx_noSlots(t *testing.T) {
+	h := &Hub{
+		metrics: map[string]*BackendMetrics{
+			"mymodel": {Name: "mymodel", Slots: []Slot{}},
+		},
+	}
+	if got := h.NCtx("mymodel"); got != 0 {
+		t.Errorf("NCtx = %d, want 0 for empty slots", got)
+	}
+}
+
 func TestHub_PollMetrics(t *testing.T) {
 	slots, _ := json.Marshal([]slotJSON{{ID: 0, IsProcessing: false}})
 	metrics := `# TYPE llamacpp:requests_processing gauge

@@ -2691,3 +2691,59 @@ model: sonnet
 
   Running full test suite...
   Tests:    ✓ all green
+  Commit:   ✓ 74678f8  wu-12: Add speculative decoding config fields
+  Changes:   16 files changed, 668 insertions(+), 10 deletions(-)
+  Moved:    → .forge/done/wu-12.md
+  ─────────────────────────────────────────────────────
+
+
+wu-13: Add context window guard to gateway
+model: sonnet
+
+  Prompt:  112 lines  (6333 bytes)
+  Log:     /home/nogo/Development/projects/wire/.forge/wu/wu-13.log
+
+  Started: 2026-04-08 14:00:38
+
+  [14:00:42]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway.go"}
+  [14:00:42]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub.go"}
+  [14:00:44]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/gateway/gateway_test…
+  [14:00:45]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/hub_test.go"…
+  [14:00:45]  ⚙  Read  {"file_path":"/home/nogo/Development/projects/wire/internal/monitor/metrics.go"}
+  [14:02:40]  💬 Now I have a clear picture. Let me implement all four changes.
+  [14:02:42]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:02:45]  💬 Now update gateway.go — add the `nctxProvider` interface, `hub` field, update `newGateway`, add `estimateTokens`, add `f
+  [14:02:46]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:02:50]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:02:54]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:03:00]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:03:15]  💬 That approach is messy. Let me redo this more cleanly — `newGateway` stays with `*monitor.Hub`, sets `g.hub` nil-safely,
+  [14:03:18]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:03:20]  💬 Now update `newGateway` body to set `g.hub` nil-safely:
+  [14:03:22]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:03:24]  💬 Now add the guard in `handleRoute` and the `estimateTokens` function:
+  [14:03:29]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:03:31]  💬 Now add `estimateTokens` before `writeError`:
+  [14:03:37]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:03:39]  💬 Now add the hub tests to `monitor/hub_test.go`:
+  [14:03:43]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:03:45]  💬 Now add the gateway tests. First I need to understand what `newGateway` signature looks like now, and add `mockHub` + te
+  [14:04:03]  ⚙  Edit  {"replace_all":false,"file_path":"/home/nogo/Development/projects/wire/internal/…
+  [14:04:05]  💬 Now let's run the tests to verify:
+  [14:04:06]  ⚙  Bash  {"command":"go test -run \"TestHub_NCtx|TestHandleRoute_contextGuard|TestEstimat…
+  [14:04:09]  💬 All pass. Run the full check:
+  [14:04:09]  ⚙  Bash  {"command":"mise run check 2>&1","description":"Run mise check"}
+  [14:04:29]  ⚙  Bash  {"command":"gofmt -w internal/gateway/gateway_test.go 2>&1","description":"Forma…
+  [14:04:34]  ⚙  Bash  {"command":"mise run check 2>&1","description":"Run mise check again"}
+  [14:05:00]  💬 All checks pass. Here's what was implemented:
+
+**`internal/monitor/hub.go`** — Added `NCtx(model string) int` method rea
+
+  [14:05:00]  ✅ Done — tokens: 20 in / 14662 out | cost: $0.569925
+
+  ─────────────────────────────────────────────────────
+  Finished: 2026-04-08 14:05:00  (4m 22s)
+  Status:   ✓ OK
+
+  Running full test suite...
+  Tests:    ✓ all green

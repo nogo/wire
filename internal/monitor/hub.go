@@ -263,6 +263,18 @@ func (h *Hub) broadcast(msg HubMessage) {
 	}
 }
 
+// NCtx returns the n_ctx value for the named model from the last poll.
+// Returns 0 if the model is unknown or has no slots (guard should be skipped).
+func (h *Hub) NCtx(model string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	m, ok := h.metrics[model]
+	if !ok || len(m.Slots) == 0 {
+		return 0
+	}
+	return m.Slots[0].NCtx
+}
+
 // itoa converts an int to its decimal string representation without importing
 // the strconv package at the call site.
 func itoa(n int) string {

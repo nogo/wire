@@ -1,0 +1,14 @@
+All checks pass. Here's what was implemented:
+
+**`internal/monitor/hub.go`** — Added `NCtx(model string) int` method reading `h.metrics[model]` under RLock; returns 0 if model unknown or has no slots.
+
+**`internal/gateway/gateway.go`** — Four changes:
+- Added `nctxProvider` interface (`NCtx(string) int`)
+- Added `hub nctxProvider` field to `Gateway` struct
+- `newGateway` sets `g.hub = hub` nil-safely (avoids non-nil interface wrapping nil pointer)
+- Added `estimateTokens(body []byte) int` — extracts text from `messages[].content` (string or array) and `input` field, returns `chars/4`
+- Inserted guard in `handleRoute` after `LoadOrGet` / before affinity: skips if hub nil, nCtx unknown, or estimation returns 0; rejects with HTTP 400 `context_length_exceeded` when `est > nCtx*9/10`
+
+**`internal/monitor/hub_test.go`** — Added `TestHub_NCtx`, `TestHub_NCtx_unknown`, `TestHub_NCtx_noSlots`.
+
+**`internal/gateway/gateway_test.go`** — Added `mockHub` type, `TestHandleRoute_contextGuard_reject/pass/noHub`, and `TestEstimateTokens` covering chat strings, array content, embedding string/array inputs, invalid JSON, and empty messages.
