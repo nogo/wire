@@ -58,7 +58,22 @@ echo "installed $BINARY"
 
 # Install systemd user service
 mkdir -p "$SERVICE_DIR"
-install -Dm644 "$TMPDIR/deploy/wire.service" "$SERVICE_DIR/wire.service"
+cat > "$SERVICE_DIR/wire.service" <<'EOF'
+[Unit]
+Description=Wire inference gateway
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wire up
+Restart=on-failure
+RestartSec=5
+Environment=WIRE_CONFIG=%h/.config/wire/config.yaml
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
+EOF
 
 systemctl --user daemon-reload
 echo "installed systemd user service"
