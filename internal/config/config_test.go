@@ -22,59 +22,6 @@ func setEnv(t *testing.T, key, value string) {
 	t.Setenv(key, value)
 }
 
-func TestLoad_ValidMixed(t *testing.T) {
-	path := writeConfig(t, `
-listen: ":9090"
-backends:
-  local:
-    model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M"
-    context: 4096
-    gpu_layers: 35
-  openai:
-    url: "https://api.openai.com/v1"
-    api_key: "sk-test"
-    provider: "openai"
-peers:
-  - "10.0.0.2:8080"
-`)
-	setEnv(t, "WIRE_CONFIG", path)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if cfg.Listen != ":9090" {
-		t.Errorf("listen: got %q, want %q", cfg.Listen, ":9090")
-	}
-	if len(cfg.Backends) != 2 {
-		t.Errorf("backends: got %d, want 2", len(cfg.Backends))
-	}
-
-	local := cfg.Backends["local"]
-	if !local.IsManaged() {
-		t.Error("local backend should be managed")
-	}
-	if local.IsExternal() {
-		t.Error("local backend should not be external")
-	}
-	if local.Model != "Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M" {
-		t.Errorf("local.model: got %q", local.Model)
-	}
-
-	ext := cfg.Backends["openai"]
-	if !ext.IsExternal() {
-		t.Error("openai backend should be external")
-	}
-	if ext.Provider != "openai" {
-		t.Errorf("openai.provider: got %q, want %q", ext.Provider, "openai")
-	}
-
-	if len(cfg.Peers) != 1 || cfg.Peers[0] != "10.0.0.2:8080" {
-		t.Errorf("peers: got %v", cfg.Peers)
-	}
-}
-
 func TestLoad_MissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.yaml")
 	setEnv(t, "WIRE_CONFIG", path)
@@ -86,67 +33,18 @@ func TestLoad_MissingFile(t *testing.T) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("expected ErrNotExist in chain, got: %v", err)
 	}
-	// Error message must mention the path.
-	msg := err.Error()
-	for i := range len(path) {
-		_ = i // use for range n idiom below
-	}
-	for range len(path) {
-		break // confirm for range n compiles; actual path check below
-	}
-	if !contains(msg, path) {
-		t.Errorf("error %q does not mention path %q", msg, path)
-	}
-}
-
-func TestLoad_BothModelAndURL(t *testing.T) {
-	path := writeConfig(t, `
-backends:
-  bad:
-    model: "some/model"
-    url: "http://localhost:11434"
-`)
-	setEnv(t, "WIRE_CONFIG", path)
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected validation error, got nil")
-	}
-	ve, ok := errors.AsType[*ValidationError](err)
-	if !ok {
-		t.Fatalf("expected *ValidationError, got %T: %v", err, err)
-	}
-	if ve.Field != "backends.bad" {
-		t.Errorf("field: got %q, want %q", ve.Field, "backends.bad")
-	}
-}
-
-func TestLoad_NeitherModelNorURL(t *testing.T) {
-	path := writeConfig(t, `
-backends:
-  empty:
-    context: 2048
-`)
-	setEnv(t, "WIRE_CONFIG", path)
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected validation error, got nil")
-	}
-	ve, ok := errors.AsType[*ValidationError](err)
-	if !ok {
-		t.Fatalf("expected *ValidationError, got %T: %v", err, err)
-	}
-	if ve.Field != "backends.empty" {
-		t.Errorf("field: got %q, want %q", ve.Field, "backends.empty")
+	if !contains(err.Error(), path) {
+		t.Errorf("error %q does not mention path %q", err.Error(), path)
 	}
 }
 
 func TestLoad_Defaults(t *testing.T) {
 	path := writeConfig(t, `
-backends:
-  ext:
-    url: "http://localhost:11434"
+models:
+  "org/model":
+    context: 4096
+warmup:
+  - "org/model"
 `)
 	setEnv(t, "WIRE_CONFIG", path)
 
@@ -154,11 +52,244 @@ backends:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Listen != ":8080" {
-		t.Errorf("listen default: got %q, want %q", cfg.Listen, ":8080")
+	if cfg.Listen != ":9480" {
+		t.Errorf("listen default: got %q, want %q", cfg.Listen, ":9480")
 	}
-	if cfg.Backends["ext"].Provider != "openai" {
-		t.Errorf("provider default: got %q, want %q", cfg.Backends["ext"].Provider, "openai")
+	if cfg.MaxModels != 1 {
+		t.Errorf("max_models default: got %d, want 1", cfg.MaxModels)
+	}
+	if cfg.Models["org/model"].Slots != 1 {
+		t.Errorf("slots default: got %d, want 1", cfg.Models["org/model"].Slots)
+	}
+}
+
+func TestLoad_ExplicitValues(t *testing.T) {
+	path := writeConfig(t, `
+listen: ":9090"
+monitor: true
+max_models: 3
+models:
+  "org/model-A":
+    context: 8192
+    gpu_layers: 35
+    slots: 4
+    pooling: "mean"
+  "org/model-B":
+    context: 2048
+warmup:
+  - "org/model-A"
+  - "org/model-B"
+  - "org/model-C"
+`)
+	// max_models=3 and 3 warmup entries — valid, but model-C has no pattern match.
+	// Use a valid config instead.
+	path = writeConfig(t, `
+listen: ":9090"
+monitor: true
+max_models: 2
+models:
+  "org/model-A":
+    context: 8192
+    gpu_layers: 35
+    slots: 4
+    pooling: "mean"
+  "org/model-B":
+    context: 2048
+warmup:
+  - "org/model-A"
+  - "org/model-B"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Listen != ":9090" {
+		t.Errorf("listen: got %q, want %q", cfg.Listen, ":9090")
+	}
+	if !cfg.Monitor {
+		t.Error("monitor: got false, want true")
+	}
+	if cfg.MaxModels != 2 {
+		t.Errorf("max_models: got %d, want 2", cfg.MaxModels)
+	}
+
+	a := cfg.Models["org/model-A"]
+	if a.Context != 8192 {
+		t.Errorf("model-A context: got %d, want 8192", a.Context)
+	}
+	if a.GPULayers != 35 {
+		t.Errorf("model-A gpu_layers: got %d, want 35", a.GPULayers)
+	}
+	if a.Slots != 4 {
+		t.Errorf("model-A slots: got %d, want 4", a.Slots)
+	}
+	if a.Pooling != "mean" {
+		t.Errorf("model-A pooling: got %q, want %q", a.Pooling, "mean")
+	}
+
+	if len(cfg.Warmup) != 2 {
+		t.Errorf("warmup len: got %d, want 2", len(cfg.Warmup))
+	}
+}
+
+func TestLoad_GlobMatch(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/Qwen3-*":
+    context: 4096
+    gpu_layers: 20
+warmup:
+  - "org/Qwen3-8B-Instruct"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	params, ok := cfg.MatchModel("org/Qwen3-8B-Instruct")
+	if !ok {
+		t.Fatal("MatchModel: expected match for org/Qwen3-8B-Instruct")
+	}
+	if params.Context != 4096 {
+		t.Errorf("context: got %d, want 4096", params.Context)
+	}
+
+	_, ok = cfg.MatchModel("org/Llama-3-8B")
+	if ok {
+		t.Error("MatchModel: expected no match for org/Llama-3-8B")
+	}
+}
+
+func TestLoad_GlobMatch_NoMatch(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/model":
+    context: 4096
+warmup:
+  - "org/model"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, ok := cfg.MatchModel("other/model")
+	if ok {
+		t.Error("MatchModel: expected no match for other/model")
+	}
+}
+
+func TestLoad_WarmupNoPatternMatch(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/model-A":
+    context: 4096
+warmup:
+  - "org/model-B"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !contains(err.Error(), "org/model-B") {
+		t.Errorf("error should mention org/model-B, got: %v", err)
+	}
+}
+
+func TestLoad_WarmupMultiplePatternMatch(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/model-*":
+    context: 4096
+  "org/*":
+    context: 2048
+warmup:
+  - "org/model-A"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for multiple pattern matches, got nil")
+	}
+	if !contains(err.Error(), "org/model-A") {
+		t.Errorf("error should mention org/model-A, got: %v", err)
+	}
+}
+
+func TestLoad_MaxModelsExceeded(t *testing.T) {
+	path := writeConfig(t, `
+max_models: 1
+models:
+  "org/model-A":
+    context: 4096
+  "org/model-B":
+    context: 2048
+warmup:
+  - "org/model-A"
+  - "org/model-B"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for max_models exceeded, got nil")
+	}
+	if !contains(err.Error(), "max_models") {
+		t.Errorf("error should mention max_models, got: %v", err)
+	}
+}
+
+func TestLoad_SlotsDefault(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/multi":
+    slots: 4
+  "org/single":
+    context: 2048
+warmup:
+  - "org/multi"
+  - "org/single"
+max_models: 2
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Models["org/multi"].Slots != 4 {
+		t.Errorf("multi.slots: got %d, want 4", cfg.Models["org/multi"].Slots)
+	}
+	if cfg.Models["org/single"].Slots != 1 {
+		t.Errorf("single.slots default: got %d, want 1", cfg.Models["org/single"].Slots)
+	}
+}
+
+func TestLoad_MonitorDefault(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "org/model":
+    context: 2048
+warmup:
+  - "org/model"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Monitor {
+		t.Error("monitor default: got true, want false")
 	}
 }
 
@@ -169,31 +300,32 @@ func TestLoad_XDGConfigHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), []byte(`
-backends:
-  ext:
-    url: "http://localhost:11434"
+models:
+  "org/model":
+    context: 2048
+warmup:
+  - "org/model"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	t.Setenv("WIRE_CONFIG", "") // clear override
+	t.Setenv("WIRE_CONFIG", "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Listen != ":8080" {
-		t.Errorf("listen: got %q", cfg.Listen)
+	if cfg.Listen != ":9480" {
+		t.Errorf("listen: got %q, want %q", cfg.Listen, ":9480")
 	}
 }
 
-func TestLoad_MonitorTrue(t *testing.T) {
+func TestLoad_EmptyWarmup(t *testing.T) {
 	path := writeConfig(t, `
-backends:
-  ext:
-    url: "http://localhost:11434"
-monitor: true
+models:
+  "org/model":
+    context: 2048
 `)
 	setEnv(t, "WIRE_CONFIG", path)
 
@@ -201,49 +333,8 @@ monitor: true
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !cfg.Monitor {
-		t.Error("monitor: got false, want true")
-	}
-}
-
-func TestLoad_SlotsField(t *testing.T) {
-	path := writeConfig(t, `
-backends:
-  multi:
-    model: "some/model"
-    slots: 4
-  single:
-    model: "other/model"
-`)
-	setEnv(t, "WIRE_CONFIG", path)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Backends["multi"].Slots != 4 {
-		t.Errorf("multi.slots: got %d, want 4", cfg.Backends["multi"].Slots)
-	}
-	// Unset slots should default to 1.
-	if cfg.Backends["single"].Slots != 1 {
-		t.Errorf("single.slots default: got %d, want 1", cfg.Backends["single"].Slots)
-	}
-}
-
-func TestLoad_MonitorDefault(t *testing.T) {
-	path := writeConfig(t, `
-backends:
-  ext:
-    url: "http://localhost:11434"
-`)
-	setEnv(t, "WIRE_CONFIG", path)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Monitor {
-		t.Error("monitor default: got true, want false")
+	if len(cfg.Warmup) != 0 {
+		t.Errorf("warmup: got %v, want empty", cfg.Warmup)
 	}
 }
 

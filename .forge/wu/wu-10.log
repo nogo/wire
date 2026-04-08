@@ -1,0 +1,15 @@
+`mise run check` passes. Here's what was done:
+
+**Deleted:**
+- `internal/gateway/route.go` — alias-based route table, modelAliases
+- `internal/translate/` — Anthropic request/response translation
+- `internal/pidfile/` — PID file management
+
+**Rewrote:**
+- `config.go` — New `Config` + `ModelParams` structs, `MatchModel()` via `filepath.Match`, updated defaults (`:9480`, `max_models=1`) and validation (warmup entries must match exactly one pattern, `len(Warmup) <= MaxModels`)
+- `process/manager.go` — Keyed by model name, iterates `cfg.Warmup`, removed `Swap()`, external backend branches, and `swapRequest`; added `RunningModels()`; `buildArgs()` takes `(modelName, ModelParams, port)`
+- `gateway/affinity.go` — `newAffinityTable` takes `map[string]int` (model → slots), keyed by model name
+- `gateway/gateway.go` — Removed `handleAnthropicProxy`, `buildReplacer`, `replacingReader`, route table; `handleRoute` uses `MatchModel` + manager lookup; `handleModels` calls `RunningModels()`; updated `backendManager` interface
+- `cli/cli.go` — Removed `stop`, `status`, `swap`, SIGHUP handler, `swapMu`, `listenURL`, pidfile usage; 4 commands remain
+
+**All tests rewritten** to match the new config shape and behavior.

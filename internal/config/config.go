@@ -25,65 +25,35 @@ func Path() string {
 	return filepath.Join(base, "wire", "config.yaml")
 }
 
-// WriteFile marshals cfg to YAML and atomically replaces the config file.
-func WriteFile(cfg *Config) error {
-	path := Path()
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("writing config temp file: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("renaming config file: %w", err)
-	}
-	return nil
-}
-
 type Config struct {
-	Listen   string             `yaml:"listen"`
-	Backends map[string]Backend `yaml:"backends"`
-	Peers    []string           `yaml:"peers"`
-	Monitor  bool               `yaml:"monitor"`
+	Listen    string                 `yaml:"listen"`
+	Monitor   bool                   `yaml:"monitor"`
+	MaxModels int                    `yaml:"max_models"`
+	Models    map[string]ModelParams `yaml:"models"`
+	Warmup    []string               `yaml:"warmup"`
 }
 
-type Backend struct {
-	// Managed backend (llama-server)
-	Model     string   `yaml:"model"`      // HuggingFace ref, e.g. "Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M"
-	Context   int      `yaml:"context"`    // Context window size
-	GPULayers int      `yaml:"gpu_layers"` // -ngl flag
-	Slots     int      `yaml:"slots"`      // Number of parallel slots (--parallel). Default: 1.
-	Pooling   string   `yaml:"pooling"`    // "mean", "cls", "rank" — triggers --embedding flag
-	Extra     []string `yaml:"extra"`      // Additional llama-server flags
-
-	// External backend (Ollama, OpenAI, Anthropic, etc.)
-	URL      string `yaml:"url"`      // If set, backend is external — no process management
-	APIKey   string `yaml:"api_key"`  // Bearer token or x-api-key
-	Provider string `yaml:"provider"` // "openai" (default) or "anthropic"
+type ModelParams struct {
+	Context   int      `yaml:"context"`
+	GPULayers int      `yaml:"gpu_layers"`
+	Slots     int      `yaml:"slots"`
+	Pooling   string   `yaml:"pooling"`
+	Extra     []string `yaml:"extra"`
 }
 
-// IsManaged reports whether wire manages the llama-server process for this backend.
-func (b Backend) IsManaged() bool { return b.URL == "" }
-
-// IsExternal reports whether this backend is an external service.
-func (b Backend) IsExternal() bool { return !b.IsManaged() }
-
-// ValidationError describes a config validation failure.
-type ValidationError struct {
-	Field   string
-	Message string
-}
-
-func (e *ValidationError) Error() string {
-	return fmt.Sprintf("config validation: %s: %s", e.Field, e.Message)
+// MatchModel returns the ModelParams for the first glob pattern in Models that
+// matches name. Returns zero ModelParams and false if no pattern matches.
+func (c *Config) MatchModel(name string) (ModelParams, bool) {
+	for pattern, params := range c.Models {
+		matched, err := filepath.Match(pattern, name)
+		if err == nil && matched {
+			return params, true
+		}
+	}
+	return ModelParams{}, false
 }
 
 // Load reads the config from disk, applies defaults, and validates it.
-// Path resolution order: WIRE_CONFIG env var → XDG_CONFIG_HOME/wire/config.yaml →
-// ~/.config/wire/config.yaml.
 func Load() (*Config, error) {
 	path := Path()
 
@@ -113,33 +83,37 @@ func Load() (*Config, error) {
 
 func applyDefaults(cfg *Config) {
 	if cfg.Listen == "" {
-		cfg.Listen = ":8080"
+		cfg.Listen = ":9480"
 	}
-	for name, b := range cfg.Backends {
-		if b.Provider == "" {
-			b.Provider = "openai"
+	if cfg.MaxModels == 0 {
+		cfg.MaxModels = 1
+	}
+	for pattern, p := range cfg.Models {
+		if p.Slots == 0 {
+			p.Slots = 1
+			cfg.Models[pattern] = p
 		}
-		if b.Slots == 0 {
-			b.Slots = 1
-		}
-		cfg.Backends[name] = b
 	}
 }
 
 func validate(cfg *Config) error {
-	for name, b := range cfg.Backends {
-		switch {
-		case b.Model != "" && b.URL != "":
-			return &ValidationError{
-				Field:   "backends." + name,
-				Message: "cannot set both model and url",
-			}
-		case b.Model == "" && b.URL == "":
-			return &ValidationError{
-				Field:   "backends." + name,
-				Message: "must set either model or url",
+	for _, entry := range cfg.Warmup {
+		var matches int
+		for pattern := range cfg.Models {
+			matched, err := filepath.Match(pattern, entry)
+			if err == nil && matched {
+				matches++
 			}
 		}
+		if matches == 0 {
+			return fmt.Errorf("warmup entry %q does not match any model pattern", entry)
+		}
+		if matches > 1 {
+			return fmt.Errorf("warmup entry %q matches %d model patterns (expected 1)", entry, matches)
+		}
+	}
+	if len(cfg.Warmup) > cfg.MaxModels {
+		return fmt.Errorf("warmup list length %d exceeds max_models %d", len(cfg.Warmup), cfg.MaxModels)
 	}
 	return nil
 }

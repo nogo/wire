@@ -5,15 +5,13 @@ import (
 	"hash/fnv"
 	"strconv"
 	"sync"
-
-	"github.com/nogo/wire/internal/config"
 )
 
-// affinityTable maps prefix hashes to slot IDs per backend, enabling KV cache
+// affinityTable maps prefix hashes to slot IDs per model, enabling KV cache
 // reuse in llama-server by routing requests with matching prefixes to the same slot.
 type affinityTable struct {
-	mu       sync.Mutex
-	backends map[string]*backendSlots
+	mu     sync.Mutex
+	models map[string]*backendSlots
 }
 
 type backendSlots struct {
@@ -22,14 +20,14 @@ type backendSlots struct {
 	lru         []uint64       // eviction order, oldest first
 }
 
-func newAffinityTable(backends map[string]config.Backend) *affinityTable {
-	at := &affinityTable{backends: make(map[string]*backendSlots, len(backends))}
-	for name, b := range backends {
-		slots := b.Slots
+// newAffinityTable creates an affinity table from a map of model name → slot count.
+func newAffinityTable(models map[string]int) *affinityTable {
+	at := &affinityTable{models: make(map[string]*backendSlots, len(models))}
+	for name, slots := range models {
 		if slots <= 0 {
 			slots = 1
 		}
-		at.backends[name] = &backendSlots{
+		at.models[name] = &backendSlots{
 			slotCount:   slots,
 			assignments: make(map[uint64]int),
 		}
@@ -38,8 +36,8 @@ func newAffinityTable(backends map[string]config.Backend) *affinityTable {
 }
 
 // Assign returns the slot ID to use for a request with the given prefix hash on
-// the named backend. Returns (-1, false) when hash is 0 or the backend is unknown.
-func (at *affinityTable) Assign(backend string, hash uint64) (int, bool) {
+// the named model. Returns (-1, false) when hash is 0 or the model is unknown.
+func (at *affinityTable) Assign(model string, hash uint64) (int, bool) {
 	if hash == 0 {
 		return -1, false
 	}
@@ -47,12 +45,12 @@ func (at *affinityTable) Assign(backend string, hash uint64) (int, bool) {
 	at.mu.Lock()
 	defer at.mu.Unlock()
 
-	bs, ok := at.backends[backend]
+	bs, ok := at.models[model]
 	if !ok {
 		return -1, false
 	}
 
-	// Single-slot backends always use slot 0; no table needed.
+	// Single-slot models always use slot 0; no table needed.
 	if bs.slotCount == 1 {
 		return 0, true
 	}

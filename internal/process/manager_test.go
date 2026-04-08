@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -72,10 +71,10 @@ func TestHelperProcess(t *testing.T) {
 
 // testCmdBuilder returns a cmdBuilder that runs the test binary as a fake
 // llama-server subprocess.
-func testCmdBuilder(ctx context.Context, b config.Backend, port int) *exec.Cmd {
+func testCmdBuilder(ctx context.Context, modelName string, params config.ModelParams, port int) *exec.Cmd {
 	args := append(
 		[]string{"-test.run=TestHelperProcess", "--", "llama-server"},
-		buildArgs(b, port)...,
+		buildArgs(modelName, params, port)...,
 	)
 	cmd := exec.CommandContext(ctx, os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
@@ -94,8 +93,8 @@ func newTestManager(cfg *config.Config) *Manager {
 // ---------------------------------------------------------------------------
 
 func TestBuildArgs_minimal(t *testing.T) {
-	b := config.Backend{Model: "org/model"}
-	got := buildArgs(b, 19100)
+	params := config.ModelParams{}
+	got := buildArgs("org/model", params, 19100)
 	want := []string{"-hf", "org/model", "--port", "19100", "--no-webui", "--parallel", "1"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("buildArgs minimal: got %v, want %v", got, want)
@@ -103,15 +102,14 @@ func TestBuildArgs_minimal(t *testing.T) {
 }
 
 func TestBuildArgs_full(t *testing.T) {
-	b := config.Backend{
-		Model:     "org/model",
+	params := config.ModelParams{
 		GPULayers: 32,
 		Context:   4096,
 		Slots:     4,
 		Pooling:   "mean",
 		Extra:     []string{"--flash-attn"},
 	}
-	got := buildArgs(b, 19101)
+	got := buildArgs("org/model", params, 19101)
 	want := []string{
 		"-hf", "org/model",
 		"--port", "19101",
@@ -128,8 +126,8 @@ func TestBuildArgs_full(t *testing.T) {
 }
 
 func TestBuildArgs_zeroGPULayersOmitted(t *testing.T) {
-	b := config.Backend{Model: "org/model", GPULayers: 0, Context: 0}
-	args := buildArgs(b, 19102)
+	params := config.ModelParams{GPULayers: 0, Context: 0}
+	args := buildArgs("org/model", params, 19102)
 	for _, a := range args {
 		if a == "-ngl" || a == "-c" {
 			t.Errorf("unexpected flag %q in args: %v", a, args)
@@ -148,114 +146,31 @@ func TestFreePort(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// External backend tests
+// Manager tests
 // ---------------------------------------------------------------------------
-
-func TestManager_AddrExternal(t *testing.T) {
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"ext": {URL: "http://api.example.com", Provider: "openai"},
-		},
-	}
-	m := New(cfg, slog.Default())
-
-	addr, ok := m.Addr("ext")
-	if !ok {
-		t.Fatal("Addr: expected ok=true for external backend")
-	}
-	if addr != "http://api.example.com" {
-		t.Errorf("Addr: got %q, want %q", addr, "http://api.example.com")
-	}
-}
 
 func TestManager_AddrMissing(t *testing.T) {
-	m := New(&config.Config{Backends: map[string]config.Backend{}}, slog.Default())
+	m := New(&config.Config{}, slog.Default())
 	_, ok := m.Addr("nonexistent")
 	if ok {
-		t.Error("Addr: expected ok=false for missing backend")
+		t.Error("Addr: expected ok=false for missing model")
 	}
 }
 
-func TestManager_HealthyExternal_200(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
-			w.WriteHeader(http.StatusOK)
-		}
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"ext": {URL: srv.URL, Provider: "openai"},
-		},
-	}
-	m := New(cfg, slog.Default())
-
-	if !m.Healthy("ext") {
-		t.Error("Healthy: expected true for external backend returning 200")
+func TestManager_HealthyMissing(t *testing.T) {
+	m := New(&config.Config{}, slog.Default())
+	if m.Healthy("nonexistent") {
+		t.Error("Healthy: expected false for unknown model")
 	}
 }
-
-func TestManager_HealthyExternal_503(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"ext": {URL: srv.URL, Provider: "openai"},
-		},
-	}
-	m := New(cfg, slog.Default())
-
-	if m.Healthy("ext") {
-		t.Error("Healthy: expected false for external backend returning 503")
-	}
-}
-
-func TestManager_HealthyExternal_noHealthEndpoint(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"ext": {URL: srv.URL, Provider: "openai"},
-		},
-	}
-	m := New(cfg, slog.Default())
-
-	// A 404 is not 200, so this should return false.
-	if m.Healthy("ext") {
-		t.Error("Healthy: expected false for external backend returning 404")
-	}
-}
-
-func TestManager_HealthyExternal_unreachable(t *testing.T) {
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"ext": {URL: "http://127.0.0.1:1", Provider: "openai"},
-		},
-	}
-	m := New(cfg, slog.Default())
-
-	// Unreachable host → best-effort true.
-	if !m.Healthy("ext") {
-		t.Error("Healthy: expected true (best-effort) for unreachable external backend")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Managed backend lifecycle tests
-// ---------------------------------------------------------------------------
 
 func TestManager_StartStop(t *testing.T) {
 	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"local": {Model: "org/test-model"},
+		Models: map[string]config.ModelParams{
+			"org/test-model": {Slots: 1},
 		},
+		Warmup:    []string{"org/test-model"},
+		MaxModels: 1,
 	}
 	m := newTestManager(cfg)
 
@@ -269,17 +184,17 @@ func TestManager_StartStop(t *testing.T) {
 	// Poll until healthy (up to 10s for the subprocess to spin up).
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if m.Healthy("local") {
+		if m.Healthy("org/test-model") {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if !m.Healthy("local") {
-		t.Fatal("backend did not become healthy within 10s")
+	if !m.Healthy("org/test-model") {
+		t.Fatal("model did not become healthy within 10s")
 	}
 
-	addr, ok := m.Addr("local")
+	addr, ok := m.Addr("org/test-model")
 	if !ok {
 		t.Fatal("Addr: expected ok=true after healthy")
 	}
@@ -287,72 +202,16 @@ func TestManager_StartStop(t *testing.T) {
 		t.Error("Addr: returned empty string")
 	}
 
+	running := m.RunningModels()
+	if len(running) != 1 || running[0] != "org/test-model" {
+		t.Errorf("RunningModels: got %v, want [org/test-model]", running)
+	}
+
 	if err := m.Stop(); err != nil {
 		t.Errorf("Stop: %v", err)
 	}
 
-	if m.Healthy("local") {
+	if m.Healthy("org/test-model") {
 		t.Error("Healthy: expected false after Stop")
 	}
-}
-
-func TestManager_SwapNotManaged(t *testing.T) {
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"ext": {URL: "http://api.example.com", Provider: "openai"},
-		},
-	}
-	m := New(cfg, slog.Default())
-
-	ctx := context.Background()
-	if err := m.Swap(ctx, "ext", "new/model"); err == nil {
-		t.Error("Swap: expected error for non-managed backend, got nil")
-	}
-}
-
-func TestManager_Swap(t *testing.T) {
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"local": {Model: "org/model-v1"},
-		},
-	}
-	m := newTestManager(cfg)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	if err := m.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	// Wait for initial healthy.
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if m.Healthy("local") {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !m.Healthy("local") {
-		t.Fatal("backend did not become healthy before swap")
-	}
-
-	addrBefore, _ := m.Addr("local")
-
-	if err := m.Swap(ctx, "local", "org/model-v2"); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-
-	if !m.Healthy("local") {
-		t.Error("backend not healthy after swap")
-	}
-
-	addrAfter, _ := m.Addr("local")
-	// The port may differ; both should be non-empty.
-	if addrAfter == "" {
-		t.Error("Addr returned empty after swap")
-	}
-	t.Logf("addr before swap: %s, after swap: %s", addrBefore, addrAfter)
-
-	m.Stop() //nolint:errcheck
 }

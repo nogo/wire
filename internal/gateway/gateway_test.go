@@ -16,6 +16,7 @@ import (
 type mockManager struct {
 	addrs   map[string]string
 	healthy map[string]bool
+	running []string
 }
 
 func (m *mockManager) Addr(name string) (string, bool) {
@@ -27,67 +28,31 @@ func (m *mockManager) Healthy(name string) bool {
 	return m.healthy[name]
 }
 
-func TestModelAliases(t *testing.T) {
-	aliases := modelAliases("Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M")
-	want := map[string]bool{
-		"Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M": true,
-		"Qwen3-Coder-30B-A3B-Instruct-GGUF":             true,
-		"Qwen3-Coder-30B-A3B-Instruct-Q4_K_M":           true,
-		"Qwen3-Coder-30B-A3B-Instruct":                  true,
-	}
-	got := make(map[string]bool)
-	for _, a := range aliases {
-		got[a] = true
-	}
-	for k := range want {
-		if !got[k] {
-			t.Errorf("missing alias %q", k)
-		}
-	}
+func (m *mockManager) RunningModels() []string {
+	return m.running
 }
 
-func TestRouteTable_Resolve(t *testing.T) {
-	cfg := &config.Config{
-		Backends: map[string]config.Backend{
-			"chat": {Model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M"},
+// testConfig builds a minimal Config for tests.
+// modelName is used as both an exact-match pattern in Models and in Warmup.
+func testConfig(modelName string, slots int, _ string) *config.Config {
+	return &config.Config{
+		Listen: ":0",
+		Models: map[string]config.ModelParams{
+			modelName: {Slots: slots},
 		},
-	}
-	rt := buildRouteTable(cfg)
-
-	for _, model := range []string{
-		"chat",
-		"Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M",
-		"Qwen3-Coder-30B-A3B-Instruct-GGUF",
-		"Qwen3-Coder-30B-A3B-Instruct-Q4_K_M",
-		"Qwen3-Coder-30B-A3B-Instruct",
-	} {
-		name, err := rt.resolve(model)
-		if err != nil {
-			t.Errorf("resolve(%q): unexpected error: %v", model, err)
-			continue
-		}
-		if name != "chat" {
-			t.Errorf("resolve(%q) = %q, want %q", model, name, "chat")
-		}
-	}
-
-	if _, err := rt.resolve("unknown-model"); err == nil {
-		t.Error("resolve unknown model: expected error, got nil")
+		Warmup:    []string{modelName},
+		MaxModels: 1,
 	}
 }
 
 func TestGateway_Health(t *testing.T) {
-	cfg := &config.Config{
-		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"chat": {Model: "owner/model-GGUF:Q4"},
-		},
-	}
+	cfg := testConfig("org/model", 1, "")
+	cfg.Warmup = []string{"org/model"}
 
 	t.Run("healthy", func(t *testing.T) {
 		mgr := &mockManager{
-			addrs:   map[string]string{"chat": "http://localhost:9999"},
-			healthy: map[string]bool{"chat": true},
+			addrs:   map[string]string{"org/model": "http://localhost:9999"},
+			healthy: map[string]bool{"org/model": true},
 		}
 		g := newGateway(cfg, mgr, nil, slog.Default())
 		w := httptest.NewRecorder()
@@ -100,7 +65,7 @@ func TestGateway_Health(t *testing.T) {
 	t.Run("degraded", func(t *testing.T) {
 		mgr := &mockManager{
 			addrs:   map[string]string{},
-			healthy: map[string]bool{"chat": false},
+			healthy: map[string]bool{"org/model": false},
 		}
 		g := newGateway(cfg, mgr, nil, slog.Default())
 		w := httptest.NewRecorder()
@@ -112,12 +77,7 @@ func TestGateway_Health(t *testing.T) {
 }
 
 func TestGateway_HandleRoute_UnknownModel(t *testing.T) {
-	cfg := &config.Config{
-		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"chat": {Model: "owner/model-GGUF:Q4"},
-		},
-	}
+	cfg := testConfig("org/model", 1, "")
 	g := newGateway(cfg, &mockManager{}, nil, slog.Default())
 
 	w := httptest.NewRecorder()
@@ -125,16 +85,13 @@ func TestGateway_HandleRoute_UnknownModel(t *testing.T) {
 		strings.NewReader(`{"model":"no-such-model","messages":[]}`))
 	g.handleRoute(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
 
 func TestGateway_HandleRoute_MissingModel(t *testing.T) {
-	cfg := &config.Config{
-		Listen:   ":0",
-		Backends: map[string]config.Backend{"chat": {Model: "owner/model-GGUF:Q4"}},
-	}
+	cfg := testConfig("org/model", 1, "")
 	g := newGateway(cfg, &mockManager{}, nil, slog.Default())
 
 	w := httptest.NewRecorder()
@@ -147,22 +104,17 @@ func TestGateway_HandleRoute_MissingModel(t *testing.T) {
 	}
 }
 
-func TestGateway_HandleRoute_UnhealthyBackend(t *testing.T) {
-	cfg := &config.Config{
-		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"chat": {Model: "owner/model-GGUF:Q4"},
-		},
-	}
+func TestGateway_HandleRoute_ModelNotLoaded(t *testing.T) {
+	cfg := testConfig("org/model", 1, "")
 	mgr := &mockManager{
-		addrs:   map[string]string{"chat": "http://localhost:9999"},
-		healthy: map[string]bool{"chat": false},
+		addrs:   map[string]string{"org/model": "http://localhost:9999"},
+		healthy: map[string]bool{"org/model": false},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"model":"chat","messages":[]}`))
+		strings.NewReader(`{"model":"org/model","messages":[]}`))
 	g.handleRoute(w, r)
 
 	if w.Code != http.StatusServiceUnavailable {
@@ -170,32 +122,26 @@ func TestGateway_HandleRoute_UnhealthyBackend(t *testing.T) {
 	}
 }
 
-func TestGateway_HandleRoute_ProxyAndRewrite(t *testing.T) {
-	// Mock backend returns a response with the internal llama-server model name.
+func TestGateway_HandleRoute_Proxy(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-			"model":   "testmodel-Q4",
+			"model":   "org/model",
 			"choices": []any{},
 		})
 	}))
 	defer backend.Close()
 
-	cfg := &config.Config{
-		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"chat": {Model: "owner/testmodel-GGUF:Q4"},
-		},
-	}
+	cfg := testConfig("org/model", 1, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"chat": backend.URL},
-		healthy: map[string]bool{"chat": true},
+		addrs:   map[string]string{"org/model": backend.URL},
+		healthy: map[string]bool{"org/model": true},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"model":"chat","messages":[{"role":"user","content":"hi"}]}`))
+		strings.NewReader(`{"model":"org/model","messages":[{"role":"user","content":"hi"}]}`))
 	r.Header.Set("Content-Type", "application/json")
 	g.handleRoute(w, r)
 
@@ -207,34 +153,30 @@ func TestGateway_HandleRoute_ProxyAndRewrite(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got := resp["model"]; got != "chat" {
-		t.Errorf("model in response = %q, want %q", got, "chat")
+	if got := resp["model"]; got != "org/model" {
+		t.Errorf("model in response = %q, want %q", got, "org/model")
 	}
 }
 
 func TestGateway_HandleRoute_BodyPreserved(t *testing.T) {
-	// Verify the full request body reaches the backend unchanged.
 	var receivedBody []byte
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"model":"m","choices":[]}`)) //nolint:errcheck
+		w.Write([]byte(`{"model":"org/model","choices":[]}`)) //nolint:errcheck
 	}))
 	defer backend.Close()
 
-	cfg := &config.Config{
-		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"m": {URL: backend.URL},
-		},
-	}
+	cfg := testConfig("org/model", 1, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"m": backend.URL},
-		healthy: map[string]bool{"m": true},
+		addrs:   map[string]string{"org/model": backend.URL},
+		healthy: map[string]bool{"org/model": true},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
-	original := `{"model":"m","messages":[{"role":"user","content":"` + strings.Repeat("x", 1000) + `"}]}`
+	// Use empty messages so prefixHash returns 0 and no id_slot is injected,
+	// allowing us to verify the body passes through unchanged.
+	original := `{"model":"org/model","messages":[]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(original))
 	g.handleRoute(w, r)
@@ -244,26 +186,51 @@ func TestGateway_HandleRoute_BodyPreserved(t *testing.T) {
 	}
 }
 
-func TestGateway_Models(t *testing.T) {
+func TestGateway_HandleRoute_GlobMatch(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-			"object": "list",
-			"data": []map[string]any{
-				{"id": "internal-llama-name", "object": "model", "created": int64(0), "owned_by": "llama"},
-			},
-		})
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"org/Qwen3-8B","choices":[]}`)) //nolint:errcheck
 	}))
 	defer backend.Close()
 
 	cfg := &config.Config{
 		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"chat": {Model: "owner/model-GGUF:Q4"},
+		Models: map[string]config.ModelParams{
+			"org/Qwen3-*": {Slots: 1, Context: 4096},
 		},
+		Warmup:    []string{"org/Qwen3-8B"},
+		MaxModels: 1,
 	}
 	mgr := &mockManager{
-		addrs:   map[string]string{"chat": backend.URL},
-		healthy: map[string]bool{"chat": true},
+		addrs:   map[string]string{"org/Qwen3-8B": backend.URL},
+		healthy: map[string]bool{"org/Qwen3-8B": true},
+	}
+	g := newGateway(cfg, mgr, nil, slog.Default())
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/Qwen3-8B","messages":[]}`))
+	g.handleRoute(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+
+	// A model not matching the glob should return 404.
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/Llama-8B","messages":[]}`))
+	g.handleRoute(w2, r2)
+
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("non-matching model: status = %d, want 404", w2.Code)
+	}
+}
+
+func TestGateway_Models(t *testing.T) {
+	cfg := testConfig("org/model", 1, "")
+	mgr := &mockManager{
+		running: []string{"org/model"},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
@@ -277,7 +244,8 @@ func TestGateway_Models(t *testing.T) {
 	var resp struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -289,21 +257,32 @@ func TestGateway_Models(t *testing.T) {
 	if len(resp.Data) != 1 {
 		t.Fatalf("data length = %d, want 1", len(resp.Data))
 	}
-	if resp.Data[0].ID != "chat" {
-		t.Errorf("model id = %q, want %q", resp.Data[0].ID, "chat")
+	if resp.Data[0].ID != "org/model" {
+		t.Errorf("model id = %q, want %q", resp.Data[0].ID, "org/model")
+	}
+	if resp.Data[0].OwnedBy != "wire" {
+		t.Errorf("owned_by = %q, want %q", resp.Data[0].OwnedBy, "wire")
 	}
 }
 
-func TestGateway_NoBackends(t *testing.T) {
-	cfg := &config.Config{Listen: ":0", Backends: map[string]config.Backend{}}
+func TestGateway_Models_Empty(t *testing.T) {
+	cfg := &config.Config{Listen: ":0", Models: map[string]config.ModelParams{}}
 	g := newGateway(cfg, &mockManager{}, nil, slog.Default())
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"model":"x"}`))
-	g.handleRoute(w, r)
+	g.handleModels(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+
+	var resp struct {
+		Data []any `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data) != 0 {
+		t.Errorf("expected empty data, got %v", resp.Data)
 	}
 }

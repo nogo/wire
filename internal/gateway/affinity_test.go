@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/nogo/wire/internal/config"
 )
 
 // ---- prefixHash tests -------------------------------------------------------
@@ -125,32 +123,30 @@ func TestInjectSlot_NoBrace(t *testing.T) {
 
 // ---- affinityTable tests ----------------------------------------------------
 
-func newTestTable(backend string, slots int) *affinityTable {
-	return newAffinityTable(map[string]config.Backend{
-		backend: {Model: "test", Slots: slots, Provider: "openai"},
-	})
+func newTestTable(model string, slots int) *affinityTable {
+	return newAffinityTable(map[string]int{model: slots})
 }
 
 func TestAssign_HashZeroNoAffinity(t *testing.T) {
-	at := newTestTable("b", 2)
-	slotID, ok := at.Assign("b", 0)
+	at := newTestTable("org/model", 2)
+	slotID, ok := at.Assign("org/model", 0)
 	if ok || slotID != -1 {
 		t.Errorf("hash=0 should return (-1, false), got (%d, %v)", slotID, ok)
 	}
 }
 
-func TestAssign_UnknownBackend(t *testing.T) {
-	at := newTestTable("b", 2)
-	slotID, ok := at.Assign("unknown", 42)
+func TestAssign_UnknownModel(t *testing.T) {
+	at := newTestTable("org/model", 2)
+	slotID, ok := at.Assign("unknown/model", 42)
 	if ok || slotID != -1 {
-		t.Errorf("unknown backend should return (-1, false), got (%d, %v)", slotID, ok)
+		t.Errorf("unknown model should return (-1, false), got (%d, %v)", slotID, ok)
 	}
 }
 
 func TestAssign_SingleSlot_AlwaysSlotZero(t *testing.T) {
-	at := newTestTable("b", 1)
+	at := newTestTable("org/model", 1)
 	for _, hash := range []uint64{1, 2, 3, 999} {
-		slotID, ok := at.Assign("b", hash)
+		slotID, ok := at.Assign("org/model", hash)
 		if !ok || slotID != 0 {
 			t.Errorf("hash=%d: want (0, true), got (%d, %v)", hash, slotID, ok)
 		}
@@ -158,14 +154,14 @@ func TestAssign_SingleSlot_AlwaysSlotZero(t *testing.T) {
 }
 
 func TestAssign_SameHashSameSlot(t *testing.T) {
-	at := newTestTable("b", 4)
+	at := newTestTable("org/model", 4)
 	const hash = uint64(0xdeadbeef)
-	first, ok := at.Assign("b", hash)
+	first, ok := at.Assign("org/model", hash)
 	if !ok {
 		t.Fatal("first assign should succeed")
 	}
 	for i := range 5 {
-		slotID, ok := at.Assign("b", hash)
+		slotID, ok := at.Assign("org/model", hash)
 		if !ok || slotID != first {
 			t.Errorf("iteration %d: want (%d, true), got (%d, %v)", i, first, slotID, ok)
 		}
@@ -173,17 +169,17 @@ func TestAssign_SameHashSameSlot(t *testing.T) {
 }
 
 func TestAssign_DifferentHashesDifferentSlots(t *testing.T) {
-	at := newTestTable("b", 4)
+	at := newTestTable("org/model", 4)
 	hashes := []uint64{1, 2, 3, 4}
 	slots := make(map[uint64]int)
 	for _, h := range hashes {
-		slotID, ok := at.Assign("b", h)
+		slotID, ok := at.Assign("org/model", h)
 		if !ok {
 			t.Fatalf("hash=%d: assign failed unexpectedly", h)
 		}
 		slots[h] = slotID
 	}
-	// All 4 hashes on a 4-slot backend should get distinct slots.
+	// All 4 hashes on a 4-slot model should get distinct slots.
 	seen := make(map[int]bool)
 	for h, s := range slots {
 		if seen[s] {
@@ -194,20 +190,20 @@ func TestAssign_DifferentHashesDifferentSlots(t *testing.T) {
 }
 
 func TestAssign_LRUEviction(t *testing.T) {
-	at := newTestTable("b", 2) // 2 slots
+	at := newTestTable("org/model", 2) // 2 slots
 
 	// Fill both slots.
-	slot1, _ := at.Assign("b", 100)
-	slot2, _ := at.Assign("b", 200)
+	slot1, _ := at.Assign("org/model", 100)
+	slot2, _ := at.Assign("org/model", 200)
 	if slot1 == slot2 {
 		t.Fatal("two different hashes should map to different slots")
 	}
 
 	// Access hash 200 to make it recently used (hash 100 becomes oldest).
-	at.Assign("b", 200) //nolint:errcheck
+	at.Assign("org/model", 200) //nolint:errcheck
 
 	// Add a third hash; should evict hash 100 and reuse its slot.
-	slot3, ok := at.Assign("b", 300)
+	slot3, ok := at.Assign("org/model", 300)
 	if !ok {
 		t.Fatal("third assign should succeed via LRU eviction")
 	}
@@ -216,21 +212,21 @@ func TestAssign_LRUEviction(t *testing.T) {
 	}
 
 	// Hash 200 should still be assigned to its original slot.
-	s, ok := at.Assign("b", 200)
+	s, ok := at.Assign("org/model", 200)
 	if !ok || s != slot2 {
 		t.Errorf("hash 200 should still hold slot %d, got (%d, %v)", slot2, s, ok)
 	}
 }
 
 func TestAssign_ConcurrentSafety(t *testing.T) {
-	at := newTestTable("b", 4)
+	at := newTestTable("org/model", 4)
 	var wg sync.WaitGroup
 	for i := range 50 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			hash := uint64(i%5) + 1 // 5 distinct hashes on 4 slots
-			slotID, ok := at.Assign("b", hash)
+			slotID, ok := at.Assign("org/model", hash)
 			if !ok || slotID < 0 || slotID >= 4 {
 				t.Errorf("goroutine %d: invalid assignment (%d, %v)", i, slotID, ok)
 			}
@@ -254,26 +250,20 @@ func TestIntegration_SameSystemPrompt_SameSlot(t *testing.T) {
 		received = append(received, body)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"t","object":"chat.completion","model":"test","choices":[]}`)
+		fmt.Fprint(w, `{"id":"t","object":"chat.completion","model":"test/model","choices":[]}`)
 	}))
 	defer backend.Close()
 
-	cfg := &config.Config{
-		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"test": {Model: "test/model", Slots: 2, Provider: "openai"},
-		},
-	}
-
+	cfg := testConfig("test/model", 2, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"test": backend.URL},
-		healthy: map[string]bool{"test": true},
+		addrs:   map[string]string{"test/model": backend.URL},
+		healthy: map[string]bool{"test/model": true},
 	}
 	gw := newGateway(cfg, mgr, nil, slog.Default())
 	gwServer := httptest.NewServer(gw.server.Handler)
 	defer gwServer.Close()
 
-	reqBody := `{"model":"test","messages":[{"role":"system","content":"You are a test assistant."},{"role":"user","content":"Hello"}]}`
+	reqBody := `{"model":"test/model","messages":[{"role":"system","content":"You are a test assistant."},{"role":"user","content":"Hello"}]}`
 
 	sendRequest := func() {
 		t.Helper()
@@ -327,27 +317,21 @@ func TestIntegration_Fallback_NoSlotOnHashZero(t *testing.T) {
 		received = body
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"t","object":"chat.completion","model":"test","choices":[]}`)
+		fmt.Fprint(w, `{"id":"t","object":"chat.completion","model":"test/model","choices":[]}`)
 	}))
 	defer backend.Close()
 
-	cfg := &config.Config{
-		Listen: ":0",
-		Backends: map[string]config.Backend{
-			"test": {Model: "test/model", Slots: 2, Provider: "openai"},
-		},
-	}
-
+	cfg := testConfig("test/model", 2, backend.URL)
 	mgr := &mockManager{
-		addrs:   map[string]string{"test": backend.URL},
-		healthy: map[string]bool{"test": true},
+		addrs:   map[string]string{"test/model": backend.URL},
+		healthy: map[string]bool{"test/model": true},
 	}
 	gw := newGateway(cfg, mgr, nil, slog.Default())
 	gwServer := httptest.NewServer(gw.server.Handler)
 	defer gwServer.Close()
 
 	// Empty messages → hash=0 → no id_slot injected.
-	reqBody := `{"model":"test","messages":[]}`
+	reqBody := `{"model":"test/model","messages":[]}`
 	resp, err := http.Post(gwServer.URL+"/v1/chat/completions", "application/json", strings.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
