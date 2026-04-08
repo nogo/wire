@@ -16,6 +16,8 @@ builds:
 archives:
   - formats:
       - tar.gz
+    files:
+      - deploy/wire.service
 
 changelog:
   sort: asc

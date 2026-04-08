@@ -8,6 +8,7 @@ ExecStart=%h/.local/bin/wire up
 Restart=on-failure
 RestartSec=5
 Environment=WIRE_CONFIG=%h/.config/wire/config.yaml
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
