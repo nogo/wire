@@ -297,7 +297,10 @@ function buildBackendCard(name, b) {
   metaSub.textContent = "pid " + (b.pid || "\u2014") + " \u00b7 port " + (b.port || "\u2014") + " \u00b7 up " + fmtUptime(b.uptime_sec) + " \u00b7 restarts " + (b.restarts || 0);
   card.appendChild(metaSub);
 
-  card.appendChild(buildBarRow("KV Cache", "b-kv-pct", "b-kv-bar", "0%", 0, "kv"));
+  const buildSub = div("card-sub b-build");
+  card.appendChild(buildSub);
+
+  card.appendChild(buildBarRow("Context", "b-ctx-pct", "b-ctx-bar", "0%", 0, "kv"));
 
   const mr = div("metrics-row");
   mr.appendChild(buildMetric("Gen tok/s", "b-gen", "\u2014", ""));
@@ -323,11 +326,14 @@ function onMetrics(msg) {
     card = buildBackendCard(msg.backend, { status: "healthy", model: msg.backend });
     backendCards.appendChild(card);
   }
-  const kv = Math.min(msg.kv_cache_pct || 0, 100);
-  updateBarRow(card, "b-kv-pct", "b-kv-bar", kv.toFixed(1) + "%", kv, "kv");
+  const ctx = Math.min(msg.ctx_usage_pct || 0, 100);
+  updateBarRow(card, "b-ctx-pct", "b-ctx-bar", ctx.toFixed(1) + "%", ctx, "kv");
   card.querySelector(".b-gen").textContent = (msg.gen_tok_s || 0).toFixed(1);
   card.querySelector(".b-prompt").textContent = (msg.prompt_tok_s || 0).toFixed(1);
   card.querySelector(".b-queue").textContent = msg.queue_depth || 0;
+
+  const buildEl = card.querySelector(".b-build");
+  if (buildEl && msg.build_info) buildEl.textContent = msg.build_info;
 
   const slotsEl = document.getElementById("slots-" + msg.backend);
   if (!slotsEl) return;

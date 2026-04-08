@@ -105,9 +105,12 @@ func TestHandleWS_MetricsForwarded(t *testing.T) {
 		hub.broadcast(HubMessage{
 			Kind: MsgMetricsTick,
 			Metrics: &BackendMetrics{
-				Name:              "local",
-				KVCacheUsageRatio: 0.5,
-				TokensPerSecond:   42.0,
+				Name:            "local",
+				BuildInfo:       "b8705-test",
+				TokensPerSecond: 42.0,
+				Slots: []Slot{
+					{ID: 0, NCtx: 4096, TokensPredicted: 2048},
+				},
 			},
 		})
 	}()
@@ -134,12 +137,19 @@ func TestHandleWS_MetricsForwarded(t *testing.T) {
 			}
 		}
 
-		var kvPct float64
-		if err := json.Unmarshal(msg["kv_cache_pct"], &kvPct); err != nil {
-			t.Fatalf("kv_cache_pct: %v", err)
+		var ctxPct float64
+		if err := json.Unmarshal(msg["ctx_usage_pct"], &ctxPct); err != nil {
+			t.Fatalf("ctx_usage_pct: %v", err)
 		}
-		if kvPct != 50.0 {
-			t.Errorf("kv_cache_pct: got %v, want 50.0", kvPct)
+		if ctxPct != 50.0 {
+			t.Errorf("ctx_usage_pct: got %v, want 50.0", ctxPct)
+		}
+		var buildInfo string
+		if err := json.Unmarshal(msg["build_info"], &buildInfo); err != nil {
+			t.Fatalf("build_info: %v", err)
+		}
+		if buildInfo != "b8705-test" {
+			t.Errorf("build_info: got %q, want %q", buildInfo, "b8705-test")
 		}
 		return
 	}

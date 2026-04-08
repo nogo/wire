@@ -100,9 +100,11 @@ Enable the real-time dashboard by setting `monitor: true` in config. Open `http:
 The dashboard streams live telemetry over WebSocket:
 
 - Per-model status (loading, healthy, draining), request counts, token throughput
-- Slot assignment and KV cache utilization
+- Slot assignment and context window utilization
 - GPU metrics (utilization, VRAM, temperature, power) via AMD sysfs
 - llama-server events (prompt eval, generation eval, model load)
+
+![Wire Monitor](docs/monitor.png)
 
 ### Example
 

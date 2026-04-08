@@ -148,7 +148,8 @@ type gpuWireMsg struct {
 type metricsWireMsg struct {
 	Type       string          `json:"type"`
 	Backend    string          `json:"backend"`
-	KVCachePct float64         `json:"kv_cache_pct"`
+	BuildInfo  string          `json:"build_info,omitempty"`
+	CtxUsePct  float64         `json:"ctx_usage_pct"`
 	SlotsBusy  int             `json:"slots_busy"`
 	SlotsTotal int             `json:"slots_total"`
 	QueueDepth int             `json:"queue_depth"`
@@ -201,6 +202,8 @@ func toWireMsg(msg HubMessage) any {
 		}
 		m := msg.Metrics
 		slotsBusy := 0
+		totalCtx := 0
+		usedCtx := 0
 		slots := make([]slotWireEntry, 0, len(m.Slots))
 		for _, s := range m.Slots {
 			state := "idle"
@@ -208,17 +211,24 @@ func toWireMsg(msg HubMessage) any {
 				state = "generating"
 				slotsBusy++
 			}
+			totalCtx += s.NCtx
+			usedCtx += s.TokensPredicted
 			slots = append(slots, slotWireEntry{
 				ID:      s.ID,
 				State:   state,
 				Tokens:  s.TokensPredicted,
-				CtxUsed: s.TokensEvaluated,
+				CtxUsed: s.NCtx,
 			})
+		}
+		ctxPct := 0.0
+		if totalCtx > 0 {
+			ctxPct = float64(usedCtx) / float64(totalCtx) * 100
 		}
 		return metricsWireMsg{
 			Type:       "metrics",
 			Backend:    m.Name,
-			KVCachePct: m.KVCacheUsageRatio * 100,
+			BuildInfo:  m.BuildInfo,
+			CtxUsePct:  ctxPct,
 			SlotsBusy:  slotsBusy,
 			SlotsTotal: len(m.Slots),
 			QueueDepth: m.RequestsPending,

@@ -24,7 +24,7 @@ const (
 // BackendMetrics is the latest polled state for one managed backend.
 type BackendMetrics struct {
 	Name                  string
-	KVCacheUsageRatio     float64
+	BuildInfo             string
 	RequestsProcessing    int
 	RequestsPending       int
 	TokensPerSecond       float64
@@ -233,6 +233,12 @@ func (h *Hub) fetchBackend(b BackendStatus) *BackendMetrics {
 		}
 	} else {
 		h.log.Debug("slots fetch failed", "backend", b.Name, "error", err)
+	}
+
+	if data, err := h.fetch(base + "/props"); err == nil {
+		if info, err := ParseProps(data); err == nil {
+			m.BuildInfo = info
+		}
 	}
 
 	return m

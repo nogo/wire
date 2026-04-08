@@ -49,10 +49,7 @@ type Slot struct {
 	ID              int       `json:"-"`
 	State           SlotState `json:"-"`
 	NCtx            int       `json:"n_ctx"`
-	NPredict        int       `json:"n_predict"`
-	Prompt          string    `json:"prompt"`
-	TokensPredicted int       `json:"-"`
-	TokensEvaluated int       `json:"-"`
+	TokensPredicted int       `json:"-"` // n_decoded from next_token
 }
 
 // slotJSON is the raw JSON shape from llama-server /slots.
@@ -93,4 +90,15 @@ func ParseSlots(data []byte) ([]Slot, error) {
 		}
 	}
 	return slots, nil
+}
+
+// ParseProps extracts the build_info string from a /props JSON response.
+func ParseProps(data []byte) (buildInfo string, err error) {
+	var raw struct {
+		BuildInfo string `json:"build_info"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return "", err
+	}
+	return raw.BuildInfo, nil
 }

@@ -114,3 +114,32 @@ func TestParseSlots_invalid(t *testing.T) {
 		t.Error("expected error for invalid JSON")
 	}
 }
+
+func TestParseProps_basic(t *testing.T) {
+	data := []byte(`{"build_info":"b8705-09343c019","total_slots":1,"model_alias":"test"}`)
+	got, err := ParseProps(data)
+	if err != nil {
+		t.Fatalf("ParseProps: %v", err)
+	}
+	if got != "b8705-09343c019" {
+		t.Errorf("build_info: got %q, want %q", got, "b8705-09343c019")
+	}
+}
+
+func TestParseProps_missing(t *testing.T) {
+	data := []byte(`{"total_slots":1}`)
+	got, err := ParseProps(data)
+	if err != nil {
+		t.Fatalf("ParseProps: %v", err)
+	}
+	if got != "" {
+		t.Errorf("build_info: got %q, want empty", got)
+	}
+}
+
+func TestParseProps_invalid(t *testing.T) {
+	_, err := ParseProps([]byte("not json"))
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
