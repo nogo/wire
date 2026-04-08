@@ -235,6 +235,71 @@ func TestAssign_ConcurrentSafety(t *testing.T) {
 	wg.Wait()
 }
 
+// ---- Register / Remove tests ------------------------------------------------
+
+func TestRegister_NewModel(t *testing.T) {
+	at := newAffinityTable(map[string]int{})
+	at.Register("org/new-model", 4)
+
+	// Newly registered model should accept assignments.
+	slotID, ok := at.Assign("org/new-model", 42)
+	if !ok {
+		t.Fatal("Assign should return ok=true after Register")
+	}
+	if slotID < 0 || slotID >= 4 {
+		t.Errorf("slot %d out of range [0,4)", slotID)
+	}
+}
+
+func TestRegister_Idempotent_SameSlots(t *testing.T) {
+	at := newAffinityTable(map[string]int{"org/model": 2})
+
+	// Seed an assignment.
+	first, _ := at.Assign("org/model", 999)
+
+	// Register with same slot count: existing assignments must be preserved.
+	at.Register("org/model", 2)
+	second, ok := at.Assign("org/model", 999)
+	if !ok {
+		t.Fatal("Assign should return ok=true after idempotent Register")
+	}
+	if second != first {
+		t.Errorf("Register with same slots reset assignments: got slot %d, want %d", second, first)
+	}
+}
+
+func TestRegister_Reset_DifferentSlots(t *testing.T) {
+	at := newAffinityTable(map[string]int{"org/model": 1})
+	at.Assign("org/model", 7) //nolint:errcheck
+
+	// Register with a different slot count should reset.
+	at.Register("org/model", 4)
+	slotID, ok := at.Assign("org/model", 7)
+	if !ok {
+		t.Fatal("Assign should succeed after Register with new slot count")
+	}
+	if slotID < 0 || slotID >= 4 {
+		t.Errorf("slot %d out of range after re-register with 4 slots", slotID)
+	}
+}
+
+func TestRemove_ExistingModel(t *testing.T) {
+	at := newAffinityTable(map[string]int{"org/model": 2})
+	at.Remove("org/model")
+
+	// After removal the model should be unknown.
+	slotID, ok := at.Assign("org/model", 1)
+	if ok || slotID != -1 {
+		t.Errorf("Assign after Remove: want (-1, false), got (%d, %v)", slotID, ok)
+	}
+}
+
+func TestRemove_UnknownModel(t *testing.T) {
+	at := newAffinityTable(map[string]int{})
+	// Must not panic.
+	at.Remove("nonexistent")
+}
+
 // ---- integration test -------------------------------------------------------
 
 func TestIntegration_SameSystemPrompt_SameSlot(t *testing.T) {

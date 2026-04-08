@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,27 +11,46 @@ import (
 	"testing"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/monitor"
 )
 
 // mockManager is a test double for backendManager.
 type mockManager struct {
 	addrs   map[string]string
 	healthy map[string]bool
-	running []string
-}
+	models  []monitor.ModelInfo
 
-func (m *mockManager) Addr(name string) (string, bool) {
-	v, ok := m.addrs[name]
-	return v, ok
+	// Optional override for LoadOrGet behaviour.
+	loadOrGetFn func(name string) (string, func(), error)
 }
 
 func (m *mockManager) Healthy(name string) bool {
 	return m.healthy[name]
 }
 
-func (m *mockManager) RunningModels() []string {
-	return m.running
+func (m *mockManager) LoadOrGet(_ context.Context, name string, _ config.ModelParams) (string, func(), error) {
+	if m.loadOrGetFn != nil {
+		return m.loadOrGetFn(name)
+	}
+	// Default: return addr if healthy, error otherwise.
+	if !m.healthy[name] {
+		return "", func() {}, context.DeadlineExceeded // triggers 504 — use a different sentinel
+	}
+	addr, ok := m.addrs[name]
+	if !ok {
+		return "", func() {}, &unavailableError{name}
+	}
+	return addr, func() {}, nil
 }
+
+func (m *mockManager) ListModels() []monitor.ModelInfo {
+	return m.models
+}
+
+// unavailableError signals that a model is known but not loaded.
+type unavailableError struct{ model string }
+
+func (e *unavailableError) Error() string { return "model not loaded: " + e.model }
 
 // testConfig builds a minimal Config for tests.
 // modelName is used as both an exact-match pattern in Models and in Warmup.
@@ -106,9 +126,11 @@ func TestGateway_HandleRoute_MissingModel(t *testing.T) {
 
 func TestGateway_HandleRoute_ModelNotLoaded(t *testing.T) {
 	cfg := testConfig("org/model", 1, "")
+	// LoadOrGet returns a non-deadline error → 503.
 	mgr := &mockManager{
-		addrs:   map[string]string{"org/model": "http://localhost:9999"},
-		healthy: map[string]bool{"org/model": false},
+		loadOrGetFn: func(name string) (string, func(), error) {
+			return "", func() {}, &unavailableError{name}
+		},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
@@ -230,7 +252,9 @@ func TestGateway_HandleRoute_GlobMatch(t *testing.T) {
 func TestGateway_Models(t *testing.T) {
 	cfg := testConfig("org/model", 1, "")
 	mgr := &mockManager{
-		running: []string{"org/model"},
+		models: []monitor.ModelInfo{
+			{ID: "org/model", Status: "healthy"},
+		},
 	}
 	g := newGateway(cfg, mgr, nil, slog.Default())
 
@@ -246,6 +270,7 @@ func TestGateway_Models(t *testing.T) {
 		Data   []struct {
 			ID      string `json:"id"`
 			OwnedBy string `json:"owned_by"`
+			Status  string `json:"status"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -262,6 +287,9 @@ func TestGateway_Models(t *testing.T) {
 	}
 	if resp.Data[0].OwnedBy != "wire" {
 		t.Errorf("owned_by = %q, want %q", resp.Data[0].OwnedBy, "wire")
+	}
+	if resp.Data[0].Status != "healthy" {
+		t.Errorf("status = %q, want %q", resp.Data[0].Status, "healthy")
 	}
 }
 

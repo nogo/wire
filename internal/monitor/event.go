@@ -36,6 +36,13 @@ type BackendStatus struct {
 	Port      int
 	PID       int
 	Healthy   bool
+	Status    string // "loading", "healthy", "draining", "idle"
 	StartedAt time.Time
 	Restarts  int
+}
+
+// ModelInfo is a lightweight model descriptor returned by ListModels.
+type ModelInfo struct {
+	ID     string
+	Status string // "loading", "healthy", "draining"
 }

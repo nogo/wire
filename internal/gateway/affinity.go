@@ -20,6 +20,31 @@ type backendSlots struct {
 	lru         []uint64       // eviction order, oldest first
 }
 
+// Register adds or replaces a model in the affinity table. Idempotent: if the
+// model is already registered with the same slot count, existing assignments are
+// preserved. If the slot count differs, assignments are reset.
+func (at *affinityTable) Register(name string, slots int) {
+	if slots <= 0 {
+		slots = 1
+	}
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	if bs, ok := at.models[name]; ok && bs.slotCount == slots {
+		return // already registered with matching slot count
+	}
+	at.models[name] = &backendSlots{
+		slotCount:   slots,
+		assignments: make(map[uint64]int),
+	}
+}
+
+// Remove deletes a model from the affinity table, freeing its slot assignments.
+func (at *affinityTable) Remove(name string) {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	delete(at.models, name)
+}
+
 // newAffinityTable creates an affinity table from a map of model name → slot count.
 func newAffinityTable(models map[string]int) *affinityTable {
 	at := &affinityTable{models: make(map[string]*backendSlots, len(models))}

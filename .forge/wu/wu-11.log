@@ -1,0 +1,25 @@
+`mise run check` passes. Here's a summary of what was implemented:
+
+**`internal/monitor/event.go`**
+- Added `Status string` to `BackendStatus`
+- Added `ModelInfo{ID, Status}` type
+
+**`internal/process/manager.go`** (major rewrite)
+- `modelState` type: `stateIdle / stateLoading / stateHealthy / stateDraining`
+- `procState` gains: `state`, `ready chan struct{}`, `loadErr`, `inflight atomic.Int64`, `lastUsed`, `cancel`, `wg`
+- `LoadOrGet`: coalesces concurrent loads, detaches load context from caller, returns `(addr, release, err)` where `release()` decrements in-flight
+- `evictIfNeeded`: LRU eviction under lock, blocks until evicted supervisor exits, never evicts models with `inflight > 0`
+- `failLoad`: signals waiters and removes failed on-demand models from procs
+- `ListModels`: returns all non-idle models with status
+- `healthTimeout` field: injectable for fast test failures
+
+**`internal/gateway/affinity.go`**
+- `Register(name, slots)`: idempotent — preserves assignments if slot count unchanged
+- `Remove(name)`: removes model from table
+
+**`internal/gateway/gateway.go`**
+- `backendManager` interface: `Healthy`, `LoadOrGet`, `ListModels`
+- `handleRoute`: replaces `Healthy`+`Addr` calls with `LoadOrGet`; holds HTTP connection open during load; maps timeout → 504, other errors → 503
+- `handleModels`: uses `ListModels` with `status` field in response
+
+**Tests**: coalescing, LRU eviction, in-flight protection, context cancellation, load failure, capacity limit, affinity Register/Remove

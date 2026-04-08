@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,9 +19,13 @@ import (
 
 // backendManager is the subset of process.Manager the Gateway depends on.
 type backendManager interface {
-	Addr(name string) (string, bool)
 	Healthy(name string) bool
-	RunningModels() []string
+	// LoadOrGet returns the backend address for the named model, loading it on
+	// demand if not already running. The caller must call release() when the
+	// proxied request completes to decrement the in-flight counter.
+	LoadOrGet(ctx context.Context, modelName string, params config.ModelParams) (addr string, release func(), err error)
+	// ListModels returns all known models in non-idle states.
+	ListModels() []monitor.ModelInfo
 }
 
 // Gateway is an HTTP reverse-proxy that routes OpenAI-compatible requests to llama-server processes.
@@ -85,6 +90,8 @@ func (g *Gateway) ListenAndServe(ctx context.Context) error {
 }
 
 // handleRoute extracts the model field from the JSON body and proxies to the matching process.
+// If the model is known but not loaded, it is started on demand; the HTTP connection
+// is held open until the model becomes healthy.
 func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	// Tee the body so the decoder and the upstream both see it.
 	var captured bytes.Buffer
@@ -106,21 +113,28 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	// Reconstruct full body: captured bytes (read by decoder) + rest not yet read.
 	r.Body = io.NopCloser(io.MultiReader(&captured, r.Body))
 
-	if _, ok := g.cfg.MatchModel(payload.Model); !ok {
+	params, ok := g.cfg.MatchModel(payload.Model)
+	if !ok {
 		writeError(w, http.StatusNotFound, "invalid_request_error", "unknown model: "+payload.Model, "model_not_found")
 		return
 	}
 
-	if !g.mgr.Healthy(payload.Model) {
-		writeError(w, http.StatusServiceUnavailable, "server_error", "model not loaded", "model_not_loaded")
+	// LoadOrGet blocks until the model is healthy (or fails). The load context is
+	// detached from the caller's request context inside the manager, so a client
+	// disconnect does not abort an in-progress load that other requests may share.
+	addr, release, err := g.mgr.LoadOrGet(r.Context(), payload.Model, params)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			writeError(w, http.StatusGatewayTimeout, "server_error", "model load timed out: "+err.Error(), "load_timeout")
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "server_error", err.Error(), "model_not_loaded")
 		return
 	}
+	defer release()
 
-	addr, ok := g.mgr.Addr(payload.Model)
-	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "server_error", "model not loaded", "model_not_loaded")
-		return
-	}
+	// Register affinity entry for the newly loaded model (idempotent for warmup models).
+	g.affinity.Register(payload.Model, params.Slots)
 
 	// Slot affinity: read full body, compute prefix hash, inject id_slot if assigned.
 	// On any error, fall through with the original body unchanged.
@@ -154,22 +168,28 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// handleModels returns the list of currently running models.
+// handleModels returns all known models with their current status.
 func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 	type modelObj struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
 		OwnedBy string `json:"owned_by"`
+		Status  string `json:"status,omitempty"`
 	}
 	type modelsResp struct {
 		Object string     `json:"object"`
 		Data   []modelObj `json:"data"`
 	}
 
-	running := g.mgr.RunningModels()
-	data := make([]modelObj, len(running))
-	for i, name := range running {
-		data[i] = modelObj{ID: name, Object: "model", OwnedBy: "wire"}
+	models := g.mgr.ListModels()
+	data := make([]modelObj, len(models))
+	for i, mi := range models {
+		data[i] = modelObj{
+			ID:      mi.ID,
+			Object:  "model",
+			OwnedBy: "wire",
+			Status:  mi.Status,
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
