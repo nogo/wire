@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"github.com/nogo/wire/internal/config"
@@ -36,7 +37,7 @@ type backendManager interface {
 
 // Gateway is an HTTP reverse-proxy that routes OpenAI-compatible requests to llama-server processes.
 type Gateway struct {
-	cfg      *config.Config
+	cfg      atomic.Pointer[config.Config]
 	mgr      backendManager
 	log      *slog.Logger
 	affinity *affinityTable
@@ -59,7 +60,8 @@ func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, log *s
 		}
 	}
 
-	g := &Gateway{cfg: cfg, mgr: mgr, log: log, affinity: newAffinityTable(modelSlots)}
+	g := &Gateway{mgr: mgr, log: log, affinity: newAffinityTable(modelSlots)}
+	g.cfg.Store(cfg)
 	// Store hub as nctxProvider nil-safely: a nil *monitor.Hub must not become
 	// a non-nil interface value, which would cause g.hub == nil checks to fail.
 	if hub != nil {
@@ -101,6 +103,12 @@ func (g *Gateway) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+// UpdateConfig atomically replaces the gateway's config. New requests will use
+// the updated model patterns and params immediately.
+func (g *Gateway) UpdateConfig(cfg *config.Config) {
+	g.cfg.Store(cfg)
+}
+
 // handleRoute extracts the model field from the JSON body and proxies to the matching process.
 // If the model is known but not loaded, it is started on demand; the HTTP connection
 // is held open until the model becomes healthy.
@@ -125,7 +133,7 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	// Reconstruct full body: captured bytes (read by decoder) + rest not yet read.
 	r.Body = io.NopCloser(io.MultiReader(&captured, r.Body))
 
-	params, ok := g.cfg.MatchModel(payload.Model)
+	params, ok := g.cfg.Load().MatchModel(payload.Model)
 	if !ok {
 		writeError(w, http.StatusNotFound, "invalid_request_error", "unknown model: "+payload.Model, "model_not_found")
 		return
@@ -227,7 +235,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 // handleHealth returns 200 if at least one warmup model is healthy, 503 otherwise.
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	for _, name := range g.cfg.Warmup {
+	for _, name := range g.cfg.Load().Warmup {
 		if g.mgr.Loaded(name) {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck

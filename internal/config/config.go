@@ -46,6 +46,29 @@ type ModelParams struct {
 	SpecNgramM int      `yaml:"spec_ngram_m"`
 }
 
+// Equal reports whether p and other have identical parameters.
+// []string (Extra) is compared element-by-element.
+func (p ModelParams) Equal(other ModelParams) bool {
+	if p.Context != other.Context ||
+		p.GPULayers != other.GPULayers ||
+		p.Slots != other.Slots ||
+		p.Pooling != other.Pooling ||
+		p.SpecType != other.SpecType ||
+		p.DraftMax != other.DraftMax ||
+		p.DraftMin != other.DraftMin ||
+		p.SpecNgramN != other.SpecNgramN ||
+		p.SpecNgramM != other.SpecNgramM ||
+		len(p.Extra) != len(other.Extra) {
+		return false
+	}
+	for i, v := range p.Extra {
+		if v != other.Extra[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // MatchModel returns the ModelParams for the first glob pattern in Models that
 // matches name. Returns zero ModelParams and false if no pattern matches.
 func (c *Config) MatchModel(name string) (ModelParams, bool) {

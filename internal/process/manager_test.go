@@ -613,6 +613,157 @@ func TestLoadOrGet_CapacityLimit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Reload tests
+// ---------------------------------------------------------------------------
+
+// TestReload_ParamsChanged verifies that a model with changed params is drained
+// and restarted by Reload.
+func TestReload_ParamsChanged(t *testing.T) {
+	cfg := &config.Config{
+		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 1}},
+		Warmup:    []string{"org/model-a"},
+		MaxModels: 1,
+	}
+	m := newTestManager(cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+
+	// New config: same model, different params.
+	newCfg := &config.Config{
+		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 2}},
+		Warmup:    []string{"org/model-a"},
+		MaxModels: 1,
+	}
+	m.Reload(newCfg)
+
+	// Model should restart and become healthy again.
+	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+}
+
+// TestReload_ParamsUnchanged verifies that a model with unchanged params is NOT
+// restarted by Reload — same port (same process) before and after.
+func TestReload_ParamsUnchanged(t *testing.T) {
+	cfg := &config.Config{
+		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 1}},
+		Warmup:    []string{"org/model-a"},
+		MaxModels: 1,
+	}
+	m := newTestManager(cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+
+	addrBefore, ok := m.Addr("org/model-a")
+	if !ok {
+		t.Fatal("Addr: expected ok=true before Reload")
+	}
+
+	// Same params — should be a no-op for this model.
+	newCfg := &config.Config{
+		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 1}},
+		Warmup:    []string{"org/model-a"},
+		MaxModels: 1,
+	}
+	m.Reload(newCfg)
+
+	if !m.Loaded("org/model-a") {
+		t.Fatal("model should still be loaded after no-op Reload")
+	}
+	addrAfter, ok := m.Addr("org/model-a")
+	if !ok {
+		t.Fatal("Addr: expected ok=true after Reload")
+	}
+	if addrBefore != addrAfter {
+		t.Errorf("addr changed after no-op Reload: %q → %q (model was restarted unexpectedly)", addrBefore, addrAfter)
+	}
+}
+
+// TestReload_RemovedModel verifies that a running model not present in the new
+// config is drained and removed by Reload.
+func TestReload_RemovedModel(t *testing.T) {
+	cfg := &config.Config{
+		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 1}},
+		Warmup:    []string{"org/model-a"},
+		MaxModels: 1,
+	}
+	m := newTestManager(cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+
+	// New config: model-a removed entirely.
+	newCfg := &config.Config{
+		Models:    map[string]config.ModelParams{"org/model-b": {Slots: 1}},
+		Warmup:    []string{},
+		MaxModels: 1,
+	}
+	m.Reload(newCfg)
+
+	if m.Loaded("org/model-a") {
+		t.Error("model-a should have been drained after Reload removed it")
+	}
+
+	m.mu.RLock()
+	_, stillInProcs := m.procs["org/model-a"]
+	m.mu.RUnlock()
+	if stillInProcs {
+		t.Error("model-a should have been deleted from procs")
+	}
+}
+
+// TestReload_NewWarmupModel verifies that a new warmup model in the updated
+// config is started by Reload.
+func TestReload_NewWarmupModel(t *testing.T) {
+	cfg := &config.Config{
+		Models: map[string]config.ModelParams{
+			"org/model-a": {Slots: 1},
+			"org/model-b": {Slots: 1},
+		},
+		Warmup:    []string{"org/model-a"},
+		MaxModels: 2,
+	}
+	m := newTestManager(cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+
+	// New config: add model-b to warmup.
+	newCfg := &config.Config{
+		Models: map[string]config.ModelParams{
+			"org/model-a": {Slots: 1},
+			"org/model-b": {Slots: 1},
+		},
+		Warmup:    []string{"org/model-a", "org/model-b"},
+		MaxModels: 2,
+	}
+	m.Reload(newCfg)
+
+	// model-b should be started and eventually healthy.
+	waitLoadedModel(t, m, "org/model-b", 10*time.Second)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

@@ -490,3 +490,60 @@ func TestGateway_Models_Empty(t *testing.T) {
 		t.Errorf("expected empty data, got %v", resp.Data)
 	}
 }
+
+// TestGateway_UpdateConfig verifies that UpdateConfig causes new requests to
+// use the updated model patterns: the old model returns 404 and the new model
+// routes successfully.
+func TestGateway_UpdateConfig(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"org/new-model","choices":[]}`)) //nolint:errcheck
+	}))
+	defer backend.Close()
+
+	oldCfg := &config.Config{
+		Listen:    ":0",
+		Models:    map[string]config.ModelParams{"org/old-model": {Slots: 1}},
+		Warmup:    []string{"org/old-model"},
+		MaxModels: 1,
+	}
+	newCfg := &config.Config{
+		Listen:    ":0",
+		Models:    map[string]config.ModelParams{"org/new-model": {Slots: 1}},
+		Warmup:    []string{"org/new-model"},
+		MaxModels: 1,
+	}
+
+	mgr := &mockManager{
+		addrs:  map[string]string{"org/new-model": backend.URL},
+		loaded: map[string]bool{"org/new-model": true},
+	}
+	g := newGateway(oldCfg, mgr, nil, slog.Default())
+
+	// Before update: old-model matches, new-model does not.
+	w := httptest.NewRecorder()
+	g.handleRoute(w, httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/new-model","messages":[]}`)))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("before UpdateConfig: status = %d, want 404", w.Code)
+	}
+
+	g.UpdateConfig(newCfg)
+
+	// After update: new-model matches and proxies successfully.
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/new-model","messages":[]}`))
+	g.handleRoute(w2, r2)
+	if w2.Code != http.StatusOK {
+		t.Errorf("after UpdateConfig: status = %d, want 200", w2.Code)
+	}
+
+	// Old model no longer matches.
+	w3 := httptest.NewRecorder()
+	g.handleRoute(w3, httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/old-model","messages":[]}`)))
+	if w3.Code != http.StatusNotFound {
+		t.Errorf("after UpdateConfig: old model status = %d, want 404", w3.Code)
+	}
+}

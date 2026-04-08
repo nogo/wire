@@ -208,6 +208,125 @@ func (m *Manager) startSupervisor(modelName string, params config.ModelParams, i
 	return nil
 }
 
+// Reload applies newCfg to the running manager. Models whose params changed are
+// drained and restarted; models no longer matching any pattern are drained and
+// removed; new warmup entries are started. Models with unchanged params keep
+// serving without interruption.
+//
+// Global fields that require a process restart (e.g. listen address) are logged
+// as warnings but not applied.
+func (m *Manager) Reload(newCfg *config.Config) {
+	if m.cfg.Listen != newCfg.Listen {
+		m.log.Warn("listen address changed; requires restart to take effect",
+			"old", m.cfg.Listen, "new", newCfg.Listen)
+	}
+
+	type drainOp struct {
+		name      string
+		ps        *procState
+		newParams config.ModelParams
+		restart   bool
+		isWarmup  bool
+	}
+
+	newWarmupSet := make(map[string]bool, len(newCfg.Warmup))
+	for _, name := range newCfg.Warmup {
+		newWarmupSet[name] = true
+	}
+
+	m.mu.Lock()
+	m.cfg = newCfg
+
+	var ops []drainOp
+	for name, ps := range m.procs {
+		ps.mu.Lock()
+		state := ps.state
+		oldParams := ps.params
+		wasWarmup := ps.isWarmup
+		ps.mu.Unlock()
+
+		if state != stateLoaded && state != stateLoading {
+			continue
+		}
+
+		newParams, ok := newCfg.MatchModel(name)
+		if !ok {
+			m.log.Info("draining removed model", "model", name)
+			ps.mu.Lock()
+			ps.state = stateUnloading
+			ps.mu.Unlock()
+			ops = append(ops, drainOp{name: name, ps: ps})
+			continue
+		}
+
+		if !oldParams.Equal(newParams) {
+			m.log.Info("reloading model", "model", name)
+			ps.mu.Lock()
+			ps.state = stateUnloading
+			ps.mu.Unlock()
+			ops = append(ops, drainOp{
+				name:      name,
+				ps:        ps,
+				newParams: newParams,
+				restart:   true,
+				isWarmup:  wasWarmup || newWarmupSet[name],
+			})
+			continue
+		}
+
+		if wasWarmup && !newWarmupSet[name] {
+			m.log.Info("draining removed warmup model", "model", name)
+			ps.mu.Lock()
+			ps.state = stateUnloading
+			ps.mu.Unlock()
+			ops = append(ops, drainOp{name: name, ps: ps})
+		}
+	}
+	m.mu.Unlock()
+
+	// Cancel all affected models simultaneously, then wait for each to exit.
+	// This runs outside m.mu to avoid deadlocking with the supervisor goroutine.
+	for i := range ops {
+		ops[i].ps.cancel()
+	}
+	for i := range ops {
+		ops[i].ps.wg.Wait()
+	}
+
+	m.mu.Lock()
+	for i := range ops {
+		delete(m.procs, ops[i].name)
+	}
+	m.mu.Unlock()
+
+	// Restart models whose params changed.
+	for _, op := range ops {
+		if op.restart {
+			if err := m.startSupervisor(op.name, op.newParams, op.isWarmup); err != nil {
+				m.log.Error("failed to restart model after reload", "model", op.name, "error", err)
+			}
+		}
+	}
+
+	// Start new warmup models not currently in procs.
+	for _, name := range newCfg.Warmup {
+		m.mu.RLock()
+		_, exists := m.procs[name]
+		m.mu.RUnlock()
+		if exists {
+			continue
+		}
+		params, ok := newCfg.MatchModel(name)
+		if !ok {
+			continue
+		}
+		m.log.Info("starting new warmup model", "model", name)
+		if err := m.startSupervisor(name, params, true); err != nil {
+			m.log.Error("failed to start new warmup model", "model", name, "error", err)
+		}
+	}
+}
+
 // Stop cancels all managed processes and waits for them to exit.
 func (m *Manager) Stop() error {
 	if m.cancel != nil {

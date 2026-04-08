@@ -1,0 +1,17 @@
+All checks pass. Here's a summary of what was implemented:
+
+### Changes
+
+**`internal/config/config.go`** — Added `ModelParams.Equal(other ModelParams) bool` that compares all scalar fields and does element-by-element comparison of `Extra []string`, avoiding `==` on slices and `reflect.DeepEqual`.
+
+**`internal/process/manager.go`** — Added `Manager.Reload(newCfg *config.Config)`:
+- Logs a warning for `Listen` address changes (requires restart)
+- Holds `m.mu` only briefly to update `m.cfg` and collect drain operations (sets state to `stateUnloading`)
+- Releases lock, then cancels all affected processes in parallel, waits for each to exit (avoids the deadlock with supervisor goroutines)
+- Re-acquires lock to delete drained entries, then calls `startSupervisor` for models with changed params and new warmup models
+
+**`internal/gateway/gateway.go`** — Changed `cfg *config.Config` to `cfg atomic.Pointer[config.Config]` for lock-free reads on the hot path. Added `Gateway.UpdateConfig(cfg *config.Config)`. Updated `handleRoute` and `handleHealth` to read via `g.cfg.Load()`.
+
+**`internal/process/manager_test.go`** — Four new tests: `TestReload_ParamsChanged`, `TestReload_ParamsUnchanged`, `TestReload_RemovedModel`, `TestReload_NewWarmupModel`.
+
+**`internal/gateway/gateway_test.go`** — `TestGateway_UpdateConfig` verifies old model returns 404 before update and new model routes successfully after.
