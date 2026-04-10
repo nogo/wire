@@ -97,12 +97,14 @@ func writeJSON(ctx context.Context, conn *websocket.Conn, v any) error {
 
 // snapMsg is the initial state snapshot sent on connect.
 type snapMsg struct {
-	Type     string                     `json:"type"`
-	Backends map[string]backendSnapInfo `json:"backends"`
-	GPUs     []GPUMetrics               `json:"gpus"`
+	Type      string                        `json:"type"`
+	Locals    map[string]localSnapInfo      `json:"locals"`
+	GPUs      []GPUMetrics                  `json:"gpus"`
+	Remote    map[string]remoteSnapInfo     `json:"remote,omitempty"`
+	Discovery map[string]discoveryWireEntry `json:"discovery,omitempty"`
 }
 
-type backendSnapInfo struct {
+type localSnapInfo struct {
 	Model     string  `json:"model"`
 	Status    string  `json:"status"`
 	PID       int     `json:"pid"`
@@ -111,8 +113,16 @@ type backendSnapInfo struct {
 	Restarts  int     `json:"restarts"`
 }
 
+type remoteSnapInfo struct {
+	Provider  string  `json:"provider"`
+	InFlight  int64   `json:"in_flight"`
+	Requests  int64   `json:"requests"`
+	Errors    int64   `json:"errors"`
+	LatencyMs float64 `json:"latency_ms"`
+}
+
 func buildSnapshotMsg(snap *HubSnapshot, statuses []BackendStatus) snapMsg {
-	backends := make(map[string]backendSnapInfo, len(statuses))
+	locals := make(map[string]localSnapInfo, len(statuses))
 	for _, s := range statuses {
 		status := "unloaded"
 		if s.Loaded {
@@ -122,7 +132,7 @@ func buildSnapshotMsg(snap *HubSnapshot, statuses []BackendStatus) snapMsg {
 		if !s.StartedAt.IsZero() {
 			uptime = time.Since(s.StartedAt).Seconds()
 		}
-		backends[s.Name] = backendSnapInfo{
+		locals[s.Name] = localSnapInfo{
 			Model:     s.Model,
 			Status:    status,
 			PID:       s.PID,
@@ -135,7 +145,42 @@ func buildSnapshotMsg(snap *HubSnapshot, statuses []BackendStatus) snapMsg {
 	if gpus == nil {
 		gpus = []GPUMetrics{}
 	}
-	return snapMsg{Type: "snapshot", Backends: backends, GPUs: gpus}
+
+	var remote map[string]remoteSnapInfo
+	if len(snap.Remote) > 0 {
+		remote = make(map[string]remoteSnapInfo, len(snap.Remote))
+		for name, rs := range snap.Remote {
+			remote[name] = remoteSnapInfo{
+				Provider:  rs.Provider,
+				InFlight:  rs.InFlight,
+				Requests:  rs.Requests,
+				Errors:    rs.Errors,
+				LatencyMs: rs.AvgLatencyMs(),
+			}
+		}
+	}
+
+	var discovery map[string]discoveryWireEntry
+	if len(snap.Discovery.ByProvider) > 0 {
+		discovery = buildDiscoveryEntries(snap.Discovery.ByProvider)
+	}
+
+	return snapMsg{Type: "snapshot", Locals: locals, GPUs: gpus, Remote: remote, Discovery: discovery}
+}
+
+func buildDiscoveryEntries(byProvider map[string][]DiscoveredModel) map[string]discoveryWireEntry {
+	out := make(map[string]discoveryWireEntry, len(byProvider))
+	for provider, models := range byProvider {
+		ids := make([]string, len(models))
+		for i, m := range models {
+			ids[i] = m.ID
+		}
+		out[provider] = discoveryWireEntry{
+			ModelCount: len(models),
+			Models:     ids,
+		}
+	}
+	return out
 }
 
 // gpuWireMsg is the periodic GPU metrics update.
@@ -144,10 +189,10 @@ type gpuWireMsg struct {
 	GPUs []GPUMetrics `json:"gpus"`
 }
 
-// metricsWireMsg is the periodic per-backend metrics update.
+// metricsWireMsg is the periodic per-local-model metrics update.
 type metricsWireMsg struct {
 	Type       string          `json:"type"`
-	Backend    string          `json:"backend"`
+	Local      string          `json:"local"`
 	BuildInfo  string          `json:"build_info,omitempty"`
 	CtxUsePct  float64         `json:"ctx_usage_pct"`
 	SlotsBusy  int             `json:"slots_busy"`
@@ -168,7 +213,7 @@ type slotWireEntry struct {
 // eventWireMsg is a structured server event.
 type eventWireMsg struct {
 	Type       string  `json:"type"`
-	Backend    string  `json:"backend"`
+	Local      string  `json:"local"`
 	Kind       string  `json:"kind"`
 	Slot       int     `json:"slot"`
 	Tokens     int     `json:"tokens"`
@@ -177,12 +222,30 @@ type eventWireMsg struct {
 	Message    string  `json:"message"`
 }
 
-// stateWireMsg is a backend health state transition.
+// stateWireMsg is a local model health state transition.
 type stateWireMsg struct {
-	Type    string `json:"type"`
-	Backend string `json:"backend"`
-	Status  string `json:"status"`
-	Model   string `json:"model"`
+	Type   string `json:"type"`
+	Local  string `json:"local"`
+	Status string `json:"status"`
+	Model  string `json:"model"`
+}
+
+// remoteWireMsg is the periodic remote provider metrics update.
+type remoteWireMsg struct {
+	Type   string                    `json:"type"`
+	Remote map[string]remoteSnapInfo `json:"remote"`
+}
+
+// discoveryWireEntry is one provider's discovered model list.
+type discoveryWireEntry struct {
+	ModelCount int      `json:"model_count"`
+	Models     []string `json:"models"`
+}
+
+// discoveryWireMsg is the periodic discovery update.
+type discoveryWireMsg struct {
+	Type      string                        `json:"type"`
+	Discovery map[string]discoveryWireEntry `json:"discovery"`
 }
 
 // toWireMsg converts a HubMessage to the JSON-serialisable wire type.
@@ -226,7 +289,7 @@ func toWireMsg(msg HubMessage) any {
 		}
 		return metricsWireMsg{
 			Type:       "metrics",
-			Backend:    m.Name,
+			Local:      m.Name,
 			BuildInfo:  m.BuildInfo,
 			CtxUsePct:  ctxPct,
 			SlotsBusy:  slotsBusy,
@@ -244,7 +307,7 @@ func toWireMsg(msg HubMessage) any {
 		e := msg.Event
 		return eventWireMsg{
 			Type:       "event",
-			Backend:    e.Backend,
+			Local:      e.Backend,
 			Kind:       eventKindStr(e.Kind),
 			Slot:       e.Slot,
 			Tokens:     e.Tokens,
@@ -259,10 +322,32 @@ func toWireMsg(msg HubMessage) any {
 			status = "loaded"
 		}
 		return stateWireMsg{
-			Type:    "state",
-			Backend: msg.Backend,
-			Status:  status,
+			Type:   "state",
+			Local:  msg.Backend,
+			Status: status,
 		}
+
+	case MsgRemoteTick:
+		if len(msg.Remote) == 0 {
+			return nil
+		}
+		remote := make(map[string]remoteSnapInfo, len(msg.Remote))
+		for name, rs := range msg.Remote {
+			remote[name] = remoteSnapInfo{
+				Provider:  rs.Provider,
+				InFlight:  rs.InFlight,
+				Requests:  rs.Requests,
+				Errors:    rs.Errors,
+				LatencyMs: rs.AvgLatencyMs(),
+			}
+		}
+		return remoteWireMsg{Type: "remote", Remote: remote}
+
+	case MsgDiscoveryTick:
+		if msg.Discovery == nil || len(msg.Discovery.ByProvider) == 0 {
+			return nil
+		}
+		return discoveryWireMsg{Type: "discovery", Discovery: buildDiscoveryEntries(msg.Discovery.ByProvider)}
 
 	default:
 		return nil

@@ -395,6 +395,258 @@ models:
 	}
 }
 
+func TestLoad_Providers(t *testing.T) {
+	t.Setenv("TEST_API_KEY", "sk-test-123")
+	path := writeConfig(t, `
+providers:
+  openrouter:
+    api_key: ${TEST_API_KEY}
+  custom:
+    base_url: https://custom.api.com
+    api_key: literal-key
+models:
+  "claude-sonnet":
+    provider: openrouter
+    upstream_model: anthropic/claude-3.5-sonnet
+    capabilities: [chat, code, tools]
+  "custom-model":
+    provider: custom
+    upstream_model: my-model
+  "local-model":
+    context: 4096
+    gpu_layers: 20
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Provider env var expansion.
+	if cfg.Providers["openrouter"].APIKey != "sk-test-123" {
+		t.Errorf("openrouter api_key: got %q, want %q", cfg.Providers["openrouter"].APIKey, "sk-test-123")
+	}
+
+	// Default base URL for known provider.
+	if cfg.Providers["openrouter"].BaseURL != "https://openrouter.ai/api" {
+		t.Errorf("openrouter base_url: got %q, want default", cfg.Providers["openrouter"].BaseURL)
+	}
+
+	// Explicit base URL preserved.
+	if cfg.Providers["custom"].BaseURL != "https://custom.api.com" {
+		t.Errorf("custom base_url: got %q, want %q", cfg.Providers["custom"].BaseURL, "https://custom.api.com")
+	}
+
+	// Remote model fields.
+	cs := cfg.Models["claude-sonnet"]
+	if !cs.IsRemote() {
+		t.Error("claude-sonnet should be remote")
+	}
+	if cs.Provider != "openrouter" {
+		t.Errorf("provider: got %q, want %q", cs.Provider, "openrouter")
+	}
+	if cs.UpstreamModel != "anthropic/claude-3.5-sonnet" {
+		t.Errorf("upstream_model: got %q", cs.UpstreamModel)
+	}
+	if len(cs.Capabilities) != 3 || cs.Capabilities[0] != "chat" {
+		t.Errorf("capabilities: got %v", cs.Capabilities)
+	}
+
+	// Slots default should NOT be applied to remote models.
+	if cs.Slots != 0 {
+		t.Errorf("remote model slots: got %d, want 0", cs.Slots)
+	}
+
+	// Local model is not remote.
+	lm := cfg.Models["local-model"]
+	if lm.IsRemote() {
+		t.Error("local-model should not be remote")
+	}
+	if lm.Slots != 1 {
+		t.Errorf("local model slots default: got %d, want 1", lm.Slots)
+	}
+}
+
+func TestLoad_ProviderMissing(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  "remote-model":
+    provider: nonexistent
+    upstream_model: some-model
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for missing provider")
+	}
+	if !contains(err.Error(), "nonexistent") {
+		t.Errorf("error should mention provider name, got: %v", err)
+	}
+}
+
+func TestLoad_ProviderEmptyAPIKey(t *testing.T) {
+	t.Setenv("EMPTY_VAR", "")
+	path := writeConfig(t, `
+providers:
+  bad:
+    base_url: https://example.com
+    api_key: ${EMPTY_VAR}
+models:
+  "model":
+    provider: bad
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for empty api_key")
+	}
+	if !contains(err.Error(), "api_key") {
+		t.Errorf("error should mention api_key, got: %v", err)
+	}
+}
+
+func TestLoad_ProviderNoBaseURL(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  unknown_provider:
+    api_key: some-key
+models:
+  "model":
+    provider: unknown_provider
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for missing base_url")
+	}
+	if !contains(err.Error(), "base_url") {
+		t.Errorf("error should mention base_url, got: %v", err)
+	}
+}
+
+func TestLoad_RemoteWithLocalFields(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  test:
+    base_url: https://example.com
+    api_key: key
+models:
+  "model":
+    provider: test
+    gpu_layers: 20
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for remote model with local fields")
+	}
+	if !contains(err.Error(), "local-only") {
+		t.Errorf("error should mention local-only fields, got: %v", err)
+	}
+}
+
+func TestLoad_RemoteInWarmup(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  test:
+    base_url: https://example.com
+    api_key: key
+models:
+  "remote-model":
+    provider: test
+warmup:
+  - "remote-model"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for remote model in warmup")
+	}
+	if !contains(err.Error(), "remote") {
+		t.Errorf("error should mention remote, got: %v", err)
+	}
+}
+
+func TestProvider_ShouldListModels(t *testing.T) {
+	t.Run("default_true", func(t *testing.T) {
+		p := Provider{BaseURL: "https://example.com", APIKey: "key"}
+		if !p.ShouldListModels() {
+			t.Error("ShouldListModels should default to true")
+		}
+	})
+	t.Run("explicit_true", func(t *testing.T) {
+		v := true
+		p := Provider{BaseURL: "https://example.com", APIKey: "key", ListModels: &v}
+		if !p.ShouldListModels() {
+			t.Error("ShouldListModels should be true")
+		}
+	})
+	t.Run("explicit_false", func(t *testing.T) {
+		v := false
+		p := Provider{BaseURL: "https://example.com", APIKey: "key", ListModels: &v}
+		if p.ShouldListModels() {
+			t.Error("ShouldListModels should be false")
+		}
+	})
+}
+
+func TestLoad_ProviderListModels(t *testing.T) {
+	t.Setenv("TEST_KEY", "key")
+	path := writeConfig(t, `
+providers:
+  listed:
+    base_url: https://example.com
+    api_key: ${TEST_KEY}
+    list_models: true
+  unlisted:
+    base_url: https://example.com
+    api_key: ${TEST_KEY}
+    list_models: false
+  default_provider:
+    base_url: https://example.com
+    api_key: ${TEST_KEY}
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Providers["listed"].ShouldListModels() {
+		t.Error("listed provider should list models")
+	}
+	if cfg.Providers["unlisted"].ShouldListModels() {
+		t.Error("unlisted provider should not list models")
+	}
+	if !cfg.Providers["default_provider"].ShouldListModels() {
+		t.Error("default provider should list models (nil defaults to true)")
+	}
+}
+
+func TestModelParams_Equal_Remote(t *testing.T) {
+	a := ModelParams{Provider: "openai", UpstreamModel: "gpt-4o", Capabilities: []string{"chat", "tools"}}
+	b := ModelParams{Provider: "openai", UpstreamModel: "gpt-4o", Capabilities: []string{"chat", "tools"}}
+	if !a.Equal(b) {
+		t.Error("identical remote params should be equal")
+	}
+
+	c := ModelParams{Provider: "openai", UpstreamModel: "gpt-4o-mini", Capabilities: []string{"chat", "tools"}}
+	if a.Equal(c) {
+		t.Error("different upstream_model should not be equal")
+	}
+
+	d := ModelParams{Provider: "openai", UpstreamModel: "gpt-4o", Capabilities: []string{"chat"}}
+	if a.Equal(d) {
+		t.Error("different capabilities length should not be equal")
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		func() bool {

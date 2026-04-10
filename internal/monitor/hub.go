@@ -14,11 +14,13 @@ import (
 type HubMessageKind int
 
 const (
-	MsgSnapshot    HubMessageKind = iota // initial state snapshot for a new subscriber
-	MsgMetricsTick                       // backend metrics polled from /metrics + /slots
-	MsgGPUTick                           // GPU hardware metrics polled from sysfs
-	MsgServerEvent                       // structured event relayed from eventParser
-	MsgStateChange                       // backend health state changed
+	MsgSnapshot      HubMessageKind = iota // initial state snapshot for a new subscriber
+	MsgMetricsTick                         // backend metrics polled from /metrics + /slots
+	MsgGPUTick                             // GPU hardware metrics polled from sysfs
+	MsgServerEvent                         // structured event relayed from eventParser
+	MsgStateChange                         // backend health state changed
+	MsgRemoteTick                          // remote provider metrics polled from RemoteTracker
+	MsgDiscoveryTick                       // discovered models refreshed from providers
 )
 
 // BackendMetrics is the latest polled state for one managed backend.
@@ -36,19 +38,23 @@ type BackendMetrics struct {
 
 // HubSnapshot is the full current state, delivered to new subscribers.
 type HubSnapshot struct {
-	Backends []BackendMetrics
-	GPUs     []GPUMetrics
+	Backends  []BackendMetrics
+	GPUs      []GPUMetrics
+	Remote    map[string]RemoteStats
+	Discovery DiscoverySnapshot
 }
 
 // HubMessage is a tagged message sent to subscribers.
 type HubMessage struct {
-	Kind    HubMessageKind
-	Snap    *HubSnapshot    // MsgSnapshot
-	Metrics *BackendMetrics // MsgMetricsTick
-	GPUs    []GPUMetrics    // MsgGPUTick
-	Event   *ServerEvent    // MsgServerEvent
-	Backend string          // MsgStateChange
-	Loaded  bool            // MsgStateChange
+	Kind      HubMessageKind
+	Snap      *HubSnapshot           // MsgSnapshot
+	Metrics   *BackendMetrics        // MsgMetricsTick
+	GPUs      []GPUMetrics           // MsgGPUTick
+	Event     *ServerEvent           // MsgServerEvent
+	Backend   string                 // MsgStateChange
+	Loaded    bool                   // MsgStateChange
+	Remote    map[string]RemoteStats // MsgRemoteTick
+	Discovery *DiscoverySnapshot     // MsgDiscoveryTick
 }
 
 // Hub subscribes to the event channel from Manager, polls each backend's HTTP
@@ -58,10 +64,14 @@ type Hub struct {
 	events     <-chan ServerEvent
 	snapshotFn func() []BackendStatus
 	gpus       []GPUInfo
+	remote     *RemoteTracker
+	discovery  *ModelDiscovery
 
-	mu      sync.RWMutex
-	metrics map[string]*BackendMetrics
-	gpuData []GPUMetrics
+	mu            sync.RWMutex
+	metrics       map[string]*BackendMetrics
+	gpuData       []GPUMetrics
+	remoteData    map[string]RemoteStats
+	discoveryData DiscoverySnapshot
 
 	subsMu sync.Mutex
 	subs   map[uint64]chan HubMessage
@@ -75,19 +85,24 @@ type Hub struct {
 }
 
 // NewHub creates a Hub. snapshotFn is called on every poll tick to obtain
-// current backend addresses (Manager.Snapshot satisfies this). Call Start to
-// begin the event relay and poll loop.
-func NewHub(log *slog.Logger, events <-chan ServerEvent, snapshotFn func() []BackendStatus) *Hub {
+// current backend addresses (Manager.Snapshot satisfies this). remote may be
+// nil; when non-nil, remote provider metrics are included in the poll loop.
+// Call Start to begin the event relay and poll loop.
+func NewHub(log *slog.Logger, events <-chan ServerEvent, snapshotFn func() []BackendStatus, remote *RemoteTracker, discovery *ModelDiscovery) *Hub {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &Hub{
-		log:        log,
-		events:     events,
-		snapshotFn: snapshotFn,
-		metrics:    make(map[string]*BackendMetrics),
-		subs:       make(map[uint64]chan HubMessage),
-		ctx:        ctx,
-		cancel:     cancel,
-		client:     &http.Client{Timeout: 3 * time.Second},
+		log:           log,
+		events:        events,
+		snapshotFn:    snapshotFn,
+		remote:        remote,
+		discovery:     discovery,
+		metrics:       make(map[string]*BackendMetrics),
+		remoteData:    make(map[string]RemoteStats),
+		discoveryData: DiscoverySnapshot{ByProvider: make(map[string][]DiscoveredModel)},
+		subs:          make(map[uint64]chan HubMessage),
+		ctx:           ctx,
+		cancel:        cancel,
+		client:        &http.Client{Timeout: 3 * time.Second},
 	}
 	h.gpus = DiscoverGPUs()
 	return h
@@ -157,7 +172,23 @@ func (h *Hub) Snapshot() HubSnapshot {
 	}
 	gpuCopy := make([]GPUMetrics, len(h.gpuData))
 	copy(gpuCopy, h.gpuData)
-	return HubSnapshot{Backends: backends, GPUs: gpuCopy}
+
+	var remoteCopy map[string]RemoteStats
+	if len(h.remoteData) > 0 {
+		remoteCopy = make(map[string]RemoteStats, len(h.remoteData))
+		for k, v := range h.remoteData {
+			remoteCopy[k] = v
+		}
+	}
+
+	discoveryCopy := DiscoverySnapshot{ByProvider: make(map[string][]DiscoveredModel)}
+	for k, v := range h.discoveryData.ByProvider {
+		models := make([]DiscoveredModel, len(v))
+		copy(models, v)
+		discoveryCopy.ByProvider[k] = models
+	}
+
+	return HubSnapshot{Backends: backends, GPUs: gpuCopy, Remote: remoteCopy, Discovery: discoveryCopy}
 }
 
 func (h *Hub) relayEvents() {
@@ -208,6 +239,26 @@ func (h *Hub) poll() {
 	h.mu.Unlock()
 	if len(gpuMetrics) > 0 {
 		h.broadcast(HubMessage{Kind: MsgGPUTick, GPUs: gpuMetrics})
+	}
+
+	if h.remote != nil {
+		snap := h.remote.Snapshot()
+		h.mu.Lock()
+		h.remoteData = snap
+		h.mu.Unlock()
+		if len(snap) > 0 {
+			h.broadcast(HubMessage{Kind: MsgRemoteTick, Remote: snap})
+		}
+	}
+
+	if h.discovery != nil {
+		dsnap := h.discovery.Snapshot()
+		h.mu.Lock()
+		h.discoveryData = dsnap
+		h.mu.Unlock()
+		if len(dsnap.ByProvider) > 0 {
+			h.broadcast(HubMessage{Kind: MsgDiscoveryTick, Discovery: &dsnap})
+		}
 	}
 }
 

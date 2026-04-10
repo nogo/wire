@@ -275,7 +275,7 @@ func TestHotReload_GatewayRoutesAfterUpdate(t *testing.T) {
 	}
 	defer mgr.Stop() //nolint:errcheck
 
-	gw := gateway.New(cfg, mgr, nil, slog.Default())
+	gw := gateway.New(cfg, mgr, nil, nil, nil, slog.Default())
 
 	gwCtx, gwCancel := context.WithCancel(ctx)
 	defer gwCancel()

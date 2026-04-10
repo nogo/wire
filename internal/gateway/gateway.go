@@ -37,21 +37,24 @@ type backendManager interface {
 
 // Gateway is an HTTP reverse-proxy that routes OpenAI-compatible requests to llama-server processes.
 type Gateway struct {
-	cfg      atomic.Pointer[config.Config]
-	mgr      backendManager
-	log      *slog.Logger
-	affinity *affinityTable
-	hub      nctxProvider
-	server   *http.Server
+	cfg       atomic.Pointer[config.Config]
+	mgr       backendManager
+	log       *slog.Logger
+	affinity  *affinityTable
+	hub       nctxProvider
+	remote    *monitor.RemoteTracker
+	discovery *monitor.ModelDiscovery
+	server    *http.Server
 }
 
 // New creates a Gateway backed by the given process manager.
 // hub may be nil; when non-nil, /monitor and /monitor/ws routes are registered.
-func New(cfg *config.Config, mgr *process.Manager, hub *monitor.Hub, log *slog.Logger) *Gateway {
-	return newGateway(cfg, mgr, hub, log)
+// remote may be nil; when non-nil, remote provider requests are tracked.
+func New(cfg *config.Config, mgr *process.Manager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, log *slog.Logger) *Gateway {
+	return newGateway(cfg, mgr, hub, remote, discovery, log)
 }
 
-func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, log *slog.Logger) *Gateway {
+func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, log *slog.Logger) *Gateway {
 	// Build affinity table from warmup models.
 	modelSlots := make(map[string]int, len(cfg.Warmup))
 	for _, name := range cfg.Warmup {
@@ -60,7 +63,7 @@ func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, log *s
 		}
 	}
 
-	g := &Gateway{mgr: mgr, log: log, affinity: newAffinityTable(modelSlots)}
+	g := &Gateway{mgr: mgr, log: log, affinity: newAffinityTable(modelSlots), remote: remote, discovery: discovery}
 	g.cfg.Store(cfg)
 	// Store hub as nctxProvider nil-safely: a nil *monitor.Hub must not become
 	// a non-nil interface value, which would cause g.hub == nil checks to fail.
@@ -133,9 +136,26 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	// Reconstruct full body: captured bytes (read by decoder) + rest not yet read.
 	r.Body = io.NopCloser(io.MultiReader(&captured, r.Body))
 
-	params, ok := g.cfg.Load().MatchModel(payload.Model)
+	currentCfg := g.cfg.Load()
+	params, ok := currentCfg.MatchModel(payload.Model)
 	if !ok {
-		writeError(w, http.StatusNotFound, "invalid_request_error", "unknown model: "+payload.Model, "model_not_found")
+		// Fallback: check discovered models from provider listings.
+		if g.discovery != nil {
+			if dm, found := g.discovery.Snapshot().Lookup(payload.Model); found {
+				if _, provOk := currentCfg.Providers[dm.Provider]; provOk {
+					params = config.ModelParams{Provider: dm.Provider}
+					ok = true
+				}
+			}
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "invalid_request_error", "unknown model: "+payload.Model, "model_not_found")
+			return
+		}
+	}
+
+	if params.IsRemote() {
+		g.handleRemote(w, r, payload.Model, params, currentCfg)
 		return
 	}
 
@@ -207,24 +227,67 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 // handleModels returns all known models with their current status.
 func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 	type modelObj struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		OwnedBy string `json:"owned_by"`
-		Status  string `json:"status,omitempty"`
+		ID           string   `json:"id"`
+		Object       string   `json:"object"`
+		OwnedBy      string   `json:"owned_by"`
+		Status       string   `json:"status,omitempty"`
+		Capabilities []string `json:"capabilities,omitempty"`
+		Local        bool     `json:"local"`
 	}
 	type modelsResp struct {
 		Object string     `json:"object"`
 		Data   []modelObj `json:"data"`
 	}
 
+	cfg := g.cfg.Load()
+
+	// Local models from the process manager.
 	models := g.mgr.ListModels()
-	data := make([]modelObj, len(models))
-	for i, mi := range models {
-		data[i] = modelObj{
+	data := make([]modelObj, 0, len(models))
+	for _, mi := range models {
+		obj := modelObj{
 			ID:      mi.ID,
 			Object:  "model",
 			OwnedBy: "wire",
 			Status:  mi.Status,
+			Local:   true,
+		}
+		if p, ok := cfg.MatchModel(mi.ID); ok {
+			obj.Capabilities = p.Capabilities
+		}
+		data = append(data, obj)
+	}
+
+	// Remote models from config.
+	configuredRemote := make(map[string]bool)
+	for pattern, p := range cfg.Models {
+		if !p.IsRemote() {
+			continue
+		}
+		configuredRemote[pattern] = true
+		data = append(data, modelObj{
+			ID:           pattern,
+			Object:       "model",
+			OwnedBy:      p.Provider,
+			Status:       "available",
+			Capabilities: p.Capabilities,
+			Local:        false,
+		})
+	}
+
+	// Discovered models from provider listings (skip duplicates with config).
+	if g.discovery != nil {
+		for _, dm := range g.discovery.Snapshot().AllModels() {
+			if configuredRemote[dm.ID] {
+				continue
+			}
+			data = append(data, modelObj{
+				ID:      dm.ID,
+				Object:  "model",
+				OwnedBy: dm.Provider,
+				Status:  "available",
+				Local:   false,
+			})
 		}
 	}
 
@@ -244,6 +307,84 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
 	json.NewEncoder(w).Encode(map[string]string{"status": "degraded"}) //nolint:errcheck
+}
+
+// handleRemote proxies a request to a remote OpenAI-compatible provider,
+// bypassing the process manager entirely.
+func (g *Gateway) handleRemote(w http.ResponseWriter, r *http.Request, modelName string, params config.ModelParams, cfg *config.Config) {
+	provider, ok := cfg.Providers[params.Provider]
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "server_error", "unknown provider: "+params.Provider, "config_error")
+		return
+	}
+
+	// Rewrite model field if upstream_model is set.
+	if params.UpstreamModel != "" {
+		allBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request_error", "failed to read body", "bad_request")
+			return
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(allBody, &obj); err == nil {
+			if raw, err := json.Marshal(params.UpstreamModel); err == nil {
+				obj["model"] = raw
+				if rewritten, err := json.Marshal(obj); err == nil {
+					allBody = rewritten
+				}
+			}
+		}
+		r.Body = io.NopCloser(bytes.NewReader(allBody))
+		r.ContentLength = int64(len(allBody))
+	}
+
+	baseTarget, err := url.Parse(provider.BaseURL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "invalid provider URL", "config_error")
+		return
+	}
+
+	apiKey := provider.APIKey
+	reqPath := r.URL.Path
+	upstreamModel := params.UpstreamModel
+	if upstreamModel == "" {
+		upstreamModel = modelName
+	}
+
+	// Track remote request metrics.
+	var done func(int64, int)
+	if g.remote != nil {
+		done = g.remote.Start(modelName, params.Provider)
+	}
+	start := time.Now()
+
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(baseTarget)
+			pr.Out.URL.Path = baseTarget.Path + reqPath
+			pr.Out.Host = baseTarget.Host
+			pr.Out.Header.Set("Authorization", "Bearer "+apiKey)
+		},
+		FlushInterval: -1,
+		ModifyResponse: func(resp *http.Response) error {
+			resp.Header.Set("X-Wire-Model", upstreamModel)
+			if done != nil {
+				done(time.Since(start).Nanoseconds(), resp.StatusCode)
+				done = nil // prevent double-call
+			}
+			return rewriteContextLengthError(resp)
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			g.log.Error("remote proxy error", "model", modelName, "provider", params.Provider, "error", err)
+			if done != nil {
+				done(time.Since(start).Nanoseconds(), 502)
+				done = nil
+			}
+			writeError(w, http.StatusBadGateway, "server_error", "upstream error: "+err.Error(), "upstream_error")
+		},
+	}
+
+	proxy.ServeHTTP(w, r)
 }
 
 // estimateTokens approximates the token count of a request body using a

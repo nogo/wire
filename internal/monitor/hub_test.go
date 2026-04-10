@@ -14,7 +14,7 @@ import (
 // channel. No GPU discovery runs (discoverGPUs returns empty on most hosts).
 func newTestHub(t *testing.T, events chan ServerEvent, backends []BackendStatus) *Hub {
 	t.Helper()
-	h := NewHub(slog.Default(), events, func() []BackendStatus { return backends })
+	h := NewHub(slog.Default(), events, func() []BackendStatus { return backends }, nil, nil)
 	h.gpus = nil // disable GPU polling in unit tests
 	return h
 }

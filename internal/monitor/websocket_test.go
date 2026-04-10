@@ -22,7 +22,7 @@ func TestHandleWS_SnapshotOnConnect(t *testing.T) {
 			Loaded: true,
 			Port:   12345,
 		}}
-	})
+	}, nil, nil)
 	hub.gpus = nil
 	hub.Start()
 	defer hub.Stop()
@@ -55,12 +55,12 @@ func TestHandleWS_SnapshotOnConnect(t *testing.T) {
 		t.Errorf("first message type: got %q, want %q", typ, "snapshot")
 	}
 
-	var backends map[string]json.RawMessage
-	if err := json.Unmarshal(msg["backends"], &backends); err != nil {
-		t.Fatalf("backends field: %v", err)
+	var locals map[string]json.RawMessage
+	if err := json.Unmarshal(msg["locals"], &locals); err != nil {
+		t.Fatalf("locals field: %v", err)
 	}
-	if _, ok := backends["test"]; !ok {
-		t.Error("expected backend 'test' in snapshot")
+	if _, ok := locals["test"]; !ok {
+		t.Error("expected local 'test' in snapshot")
 	}
 
 	var gpus []json.RawMessage
@@ -75,7 +75,7 @@ func TestHandleWS_SnapshotOnConnect(t *testing.T) {
 
 func TestHandleWS_MetricsForwarded(t *testing.T) {
 	events := make(chan ServerEvent, 8)
-	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil })
+	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil }, nil, nil)
 	hub.gpus = nil
 	hub.Start()
 	defer hub.Stop()
@@ -157,7 +157,7 @@ func TestHandleWS_MetricsForwarded(t *testing.T) {
 
 func TestHandleWS_HubStop_ClosesConnection(t *testing.T) {
 	events := make(chan ServerEvent, 8)
-	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil })
+	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil }, nil, nil)
 	hub.gpus = nil
 	hub.Start()
 

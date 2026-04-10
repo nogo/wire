@@ -74,14 +74,43 @@ func runUp() error {
 		return fmt.Errorf("starting process manager: %w", err)
 	}
 
+	// Create remote tracker if any model references a provider.
+	var remote *monitor.RemoteTracker
+	for _, p := range cfg.Models {
+		if p.IsRemote() {
+			remote = monitor.NewRemoteTracker()
+			break
+		}
+	}
+
+	// Create model discovery for providers that have list_models enabled.
+	var discovery *monitor.ModelDiscovery
+	if len(cfg.Providers) > 0 {
+		var endpoints []monitor.ProviderEndpoint
+		for name, p := range cfg.Providers {
+			if p.ShouldListModels() {
+				endpoints = append(endpoints, monitor.ProviderEndpoint{
+					Name:    name,
+					BaseURL: p.BaseURL,
+					APIKey:  p.APIKey,
+				})
+			}
+		}
+		if len(endpoints) > 0 {
+			discovery = monitor.NewModelDiscovery(endpoints, slog.Default())
+			discovery.Start()
+			defer discovery.Stop()
+		}
+	}
+
 	var hub *monitor.Hub
 	if cfg.Monitor {
-		hub = monitor.NewHub(slog.Default(), mgr.Events(), mgr.Snapshot)
+		hub = monitor.NewHub(slog.Default(), mgr.Events(), mgr.Snapshot, remote, discovery)
 		hub.Start()
 		defer hub.Stop()
 	}
 
-	gw := gateway.New(cfg, mgr, hub, slog.Default())
+	gw := gateway.New(cfg, mgr, hub, remote, discovery, slog.Default())
 	gwErrCh := make(chan error, 1)
 	go func() { gwErrCh <- gw.ListenAndServe(shutCtx) }()
 
