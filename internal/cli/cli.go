@@ -105,12 +105,18 @@ func runUp() error {
 
 	var hub *monitor.Hub
 	if cfg.Monitor {
-		hub = monitor.NewHub(slog.Default(), mgr.Events(), mgr.Snapshot, remote, discovery)
-		hub.Start()
-		defer hub.Stop()
+		hub = monitor.NewHub(slog.Default(), mgr.Events(), mgr.Snapshot, remote, nil)
 	}
 
 	gw := gateway.New(cfg, mgr, hub, remote, discovery, slog.Default())
+
+	if hub != nil {
+		hub.SetModelProvider(func() []monitor.ModelInfo {
+			return gw.Models()
+		})
+		hub.Start()
+		defer hub.Stop()
+	}
 	gwErrCh := make(chan error, 1)
 	go func() { gwErrCh <- gw.ListenAndServe(shutCtx) }()
 

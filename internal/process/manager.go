@@ -67,6 +67,16 @@ type procState struct {
 	wg     sync.WaitGroup // Done when the supervisor goroutine exits
 }
 
+// addInflight increments the in-flight counter and updates lastUsed.
+// Returns the address, release function, and no error.
+func (ps *procState) addInflight(port int) (addr string, release func(), err error) {
+	ps.inflight.Add(1)
+	ps.mu.Lock()
+	ps.lastUsed = time.Now()
+	ps.mu.Unlock()
+	return fmt.Sprintf("http://localhost:%d", port), func() { ps.inflight.Add(-1) }, nil
+}
+
 // Manager supervises llama-server child processes.
 type Manager struct {
 	cfg        *config.Config
@@ -385,8 +395,6 @@ func (m *Manager) Addr(name string) (string, bool) {
 //   - "at capacity …": max_models reached with all models in use
 //   - "model … load failed: …": llama-server failed to start or become healthy
 func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config.ModelParams) (addr string, release func(), err error) {
-	noop := func() {}
-
 	m.mu.Lock()
 
 	if ps, ok := m.procs[modelName]; ok {
@@ -398,41 +406,32 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 
 		switch state {
 		case stateLoaded:
-			ps.inflight.Add(1)
-			ps.mu.Lock()
-			ps.lastUsed = time.Now()
-			ps.mu.Unlock()
 			m.mu.Unlock()
-			return fmt.Sprintf("http://localhost:%d", port), func() { ps.inflight.Add(-1) }, nil
+			return ps.addInflight(port)
 
 		case stateLoading:
-			// Another goroutine is already loading this model. Wait for it.
 			m.mu.Unlock()
 			select {
 			case <-ready:
 			case <-ctx.Done():
-				return "", noop, ctx.Err()
+				return "", func() {}, ctx.Err()
 			}
 			return m.checkLoaded(modelName)
 
 		case stateUnloading:
 			m.mu.Unlock()
-			return "", noop, fmt.Errorf("model %q is shutting down", modelName)
+			return "", func() {}, fmt.Errorf("model %q is shutting down", modelName)
 
 		case stateIdle:
-			// Stale failed entry; clean up and reload.
 			delete(m.procs, modelName)
 		}
 	}
 
-	// Model not present (or was idle): check capacity, evict if needed, then load.
-	// evictIfNeeded may release and re-acquire m.mu internally.
 	if err := m.evictIfNeeded(); err != nil {
 		m.mu.Unlock()
-		return "", noop, err
+		return "", func() {}, err
 	}
 
-	// Re-check: another goroutine may have loaded this model while we evicted.
 	if ps2, ok := m.procs[modelName]; ok {
 		ps2.mu.Lock()
 		state2 := ps2.state
@@ -441,18 +440,14 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 		ps2.mu.Unlock()
 		switch state2 {
 		case stateLoaded:
-			ps2.inflight.Add(1)
-			ps2.mu.Lock()
-			ps2.lastUsed = time.Now()
-			ps2.mu.Unlock()
 			m.mu.Unlock()
-			return fmt.Sprintf("http://localhost:%d", port2), func() { ps2.inflight.Add(-1) }, nil
+			return ps2.addInflight(port2)
 		case stateLoading:
 			m.mu.Unlock()
 			select {
 			case <-ready2:
 			case <-ctx.Done():
-				return "", noop, ctx.Err()
+				return "", func() {}, ctx.Err()
 			}
 			return m.checkLoaded(modelName)
 		}
@@ -486,7 +481,7 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 	select {
 	case <-ready:
 	case <-ctx.Done():
-		return "", noop, ctx.Err()
+		return "", func() {}, ctx.Err()
 	}
 
 	return m.checkLoaded(modelName)
@@ -494,14 +489,12 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 
 // checkLoaded reads the outcome of a completed load (after ready has closed).
 func (m *Manager) checkLoaded(modelName string) (addr string, release func(), err error) {
-	noop := func() {}
-
 	m.mu.RLock()
 	ps, ok := m.procs[modelName]
 	m.mu.RUnlock()
 
 	if !ok {
-		return "", noop, fmt.Errorf("model %q load failed", modelName)
+		return "", func() {}, fmt.Errorf("model %q load failed", modelName)
 	}
 
 	ps.mu.Lock()
@@ -512,16 +505,12 @@ func (m *Manager) checkLoaded(modelName string) (addr string, release func(), er
 
 	if state != stateLoaded {
 		if loadErr != nil {
-			return "", noop, fmt.Errorf("model %q load failed: %w", modelName, loadErr)
+			return "", func() {}, fmt.Errorf("model %q load failed: %w", modelName, loadErr)
 		}
-		return "", noop, fmt.Errorf("model %q load failed", modelName)
+		return "", func() {}, fmt.Errorf("model %q load failed", modelName)
 	}
 
-	ps.inflight.Add(1)
-	ps.mu.Lock()
-	ps.lastUsed = time.Now()
-	ps.mu.Unlock()
-	return fmt.Sprintf("http://localhost:%d", port), func() { ps.inflight.Add(-1) }, nil
+	return ps.addInflight(port)
 }
 
 // evictIfNeeded evicts the LRU idle healthy model if we are at capacity.
@@ -530,35 +519,30 @@ func (m *Manager) checkLoaded(modelName string) (addr string, release func(), er
 // and re-acquires m.mu while waiting for the evicted supervisor to exit,
 // so the caller must re-validate procs state after it returns.
 func (m *Manager) evictIfNeeded() error {
-	// Count non-idle models.
-	running := 0
-	for _, ps := range m.procs {
-		ps.mu.Lock()
-		s := ps.state
-		ps.mu.Unlock()
-		if s != stateIdle {
-			running++
-		}
-	}
-	if running < m.cfg.MaxModels {
-		return nil
-	}
-
-	// Find LRU healthy model with no in-flight requests.
 	type candidate struct {
 		name     string
 		ps       *procState
 		lastUsed time.Time
 	}
 	var candidates []candidate
+	running := 0
+
 	for name, ps := range m.procs {
 		ps.mu.Lock()
 		state := ps.state
 		lu := ps.lastUsed
 		ps.mu.Unlock()
+
+		if state != stateIdle {
+			running++
+		}
 		if state == stateLoaded && ps.inflight.Load() == 0 {
 			candidates = append(candidates, candidate{name: name, ps: ps, lastUsed: lu})
 		}
+	}
+
+	if running < m.cfg.MaxModels {
+		return nil
 	}
 	if len(candidates) == 0 {
 		return fmt.Errorf("at capacity (%d/%d models); all models have in-flight requests", running, m.cfg.MaxModels)

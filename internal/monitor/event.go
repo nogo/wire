@@ -41,8 +41,12 @@ type BackendStatus struct {
 	Restarts  int
 }
 
-// ModelInfo is a lightweight model descriptor returned by ListModels.
+// ModelInfo is a model descriptor returned by ListModels.
 type ModelInfo struct {
-	ID     string
-	Status string // "loading", "loaded", "unloading"
+	ID           string   `json:"id"`
+	Object       string   `json:"object"`
+	Type         string   `json:"type"`   // "local" or "remote"
+	Status       string   `json:"status"` // "loaded", "available", "loading", "unloading"
+	Capabilities []string `json:"capabilities,omitempty"`
+	Provider     string   `json:"provider,omitempty"` // for remote models
 }

@@ -268,9 +268,9 @@ func TestGateway_Models(t *testing.T) {
 	var resp struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID      string `json:"id"`
-			OwnedBy string `json:"owned_by"`
-			Status  string `json:"status"`
+			ID     string `json:"id"`
+			Type   string `json:"type"`
+			Status string `json:"status"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -285,8 +285,8 @@ func TestGateway_Models(t *testing.T) {
 	if resp.Data[0].ID != "org/model" {
 		t.Errorf("model id = %q, want %q", resp.Data[0].ID, "org/model")
 	}
-	if resp.Data[0].OwnedBy != "wire" {
-		t.Errorf("owned_by = %q, want %q", resp.Data[0].OwnedBy, "wire")
+	if resp.Data[0].Type != "local" {
+		t.Errorf("type = %q, want %q", resp.Data[0].Type, "local")
 	}
 	if resp.Data[0].Status != "loaded" {
 		t.Errorf("status = %q, want %q", resp.Data[0].Status, "loaded")
@@ -626,10 +626,10 @@ func TestGateway_Models_WithRemote(t *testing.T) {
 	var resp struct {
 		Data []struct {
 			ID           string   `json:"id"`
-			OwnedBy      string   `json:"owned_by"`
+			Type         string   `json:"type"`
 			Status       string   `json:"status"`
 			Capabilities []string `json:"capabilities"`
-			Local        bool     `json:"local"`
+			Provider     string   `json:"provider"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -646,22 +646,22 @@ func TestGateway_Models_WithRemote(t *testing.T) {
 		switch m.ID {
 		case "local-model":
 			local = true
-			if !m.Local {
-				t.Error("local-model should have local=true")
+			if m.Type != "local" {
+				t.Errorf("local-model type = %q, want local", m.Type)
 			}
-			if m.OwnedBy != "wire" {
-				t.Errorf("local owned_by = %q, want %q", m.OwnedBy, "wire")
+			if m.Provider != "" {
+				t.Errorf("local-model provider = %q, want empty", m.Provider)
 			}
 			if len(m.Capabilities) != 1 || m.Capabilities[0] != "chat" {
 				t.Errorf("local capabilities = %v", m.Capabilities)
 			}
 		case "remote-model":
 			remote = true
-			if m.Local {
-				t.Error("remote-model should have local=false")
+			if m.Type != "remote" {
+				t.Errorf("remote-model type = %q, want remote", m.Type)
 			}
-			if m.OwnedBy != "openrouter" {
-				t.Errorf("remote owned_by = %q, want %q", m.OwnedBy, "openrouter")
+			if m.Provider != "openrouter" {
+				t.Errorf("remote provider = %q, want openrouter", m.Provider)
 			}
 			if m.Status != "available" {
 				t.Errorf("remote status = %q, want %q", m.Status, "available")
@@ -875,10 +875,10 @@ func TestGateway_Models_WithDiscovery(t *testing.T) {
 
 	var resp struct {
 		Data []struct {
-			ID      string `json:"id"`
-			OwnedBy string `json:"owned_by"`
-			Status  string `json:"status"`
-			Local   bool   `json:"local"`
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Status   string `json:"status"`
+			Provider string `json:"provider"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -889,11 +889,11 @@ func TestGateway_Models_WithDiscovery(t *testing.T) {
 	for _, m := range resp.Data {
 		if m.ID == "discovered-model" {
 			found = true
-			if m.Local {
-				t.Error("discovered model should have local=false")
+			if m.Type != "remote" {
+				t.Errorf("discovered model type = %q, want remote", m.Type)
 			}
-			if m.OwnedBy != "prov" {
-				t.Errorf("owned_by = %q, want %q", m.OwnedBy, "prov")
+			if m.Provider != "prov" {
+				t.Errorf("provider = %q, want %q", m.Provider, "prov")
 			}
 			if m.Status != "available" {
 				t.Errorf("status = %q, want %q", m.Status, "available")

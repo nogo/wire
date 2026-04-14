@@ -11,6 +11,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,8 +29,8 @@ type nctxProvider interface {
 	NCtx(model string) int
 }
 
-// backendManager is the subset of process.Manager the Gateway depends on.
-type backendManager interface {
+// processManager is the subset of process.Manager the Gateway depends on.
+type processManager interface {
 	Loaded(name string) bool
 	// LoadOrGet returns the backend address for the named model, loading it on
 	// demand if not already running. The caller must call release() when the
@@ -35,26 +40,55 @@ type backendManager interface {
 	ListModels() []monitor.ModelInfo
 }
 
+// hfCache caches HF model IDs with a TTL to avoid repeated filesystem I/O.
+type hfCache struct {
+	mu    sync.Mutex
+	ids   []string
+	until time.Time
+}
+
+func (c *hfCache) get(ttl time.Duration) ([]string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if time.Now().Before(c.until) {
+		return c.ids, true
+	}
+	return nil, false
+}
+
+func (c *hfCache) set(ids []string, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ids = ids
+	c.until = time.Now().Add(ttl)
+}
+
 // Gateway is an HTTP reverse-proxy that routes OpenAI-compatible requests to llama-server processes.
 type Gateway struct {
-	cfg       atomic.Pointer[config.Config]
-	mgr       backendManager
-	log       *slog.Logger
-	affinity  *affinityTable
-	hub       nctxProvider
-	remote    *monitor.RemoteTracker
-	discovery *monitor.ModelDiscovery
-	server    *http.Server
+	cfg        atomic.Pointer[config.Config]
+	mgr        processManager
+	log        *slog.Logger
+	affinity   *affinityTable
+	hub        nctxProvider
+	remote     *monitor.RemoteTracker
+	discovery  *monitor.ModelDiscovery
+	server     *http.Server
+	hfCacheDir string  // HuggingFace hub cache directory; empty disables scanning
+	hfCache    hfCache // cached HF model IDs
 }
 
 // New creates a Gateway backed by the given process manager.
 // hub may be nil; when non-nil, /monitor and /monitor/ws routes are registered.
 // remote may be nil; when non-nil, remote provider requests are tracked.
 func New(cfg *config.Config, mgr *process.Manager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, log *slog.Logger) *Gateway {
-	return newGateway(cfg, mgr, hub, remote, discovery, log)
+	g := newGateway(cfg, mgr, hub, remote, discovery, log)
+	if home, err := os.UserHomeDir(); err == nil {
+		g.hfCacheDir = filepath.Join(home, ".cache", "huggingface", "hub")
+	}
+	return g
 }
 
-func newGateway(cfg *config.Config, mgr backendManager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, log *slog.Logger) *Gateway {
+func newGateway(cfg *config.Config, mgr processManager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, log *slog.Logger) *Gateway {
 	// Build affinity table from warmup models.
 	modelSlots := make(map[string]int, len(cfg.Warmup))
 	for _, name := range cfg.Warmup {
@@ -116,15 +150,17 @@ func (g *Gateway) UpdateConfig(cfg *config.Config) {
 // If the model is known but not loaded, it is started on demand; the HTTP connection
 // is held open until the model becomes healthy.
 func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
-	// Tee the body so the decoder and the upstream both see it.
-	var captured bytes.Buffer
-	tee := io.TeeReader(r.Body, &captured)
-	dec := json.NewDecoder(tee)
+	// Read body once for all operations: model extraction, token estimation, slot affinity.
+	allBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", "failed to read body", "bad_request")
+		return
+	}
 
 	var payload struct {
 		Model string `json:"model"`
 	}
-	if err := dec.Decode(&payload); err != nil {
+	if err := json.Unmarshal(allBody, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid JSON: "+err.Error(), "bad_request")
 		return
 	}
@@ -133,35 +169,28 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reconstruct full body: captured bytes (read by decoder) + rest not yet read.
-	r.Body = io.NopCloser(io.MultiReader(&captured, r.Body))
-
 	currentCfg := g.cfg.Load()
 	params, ok := currentCfg.MatchModel(payload.Model)
-	if !ok {
-		// Fallback: check discovered models from provider listings.
-		if g.discovery != nil {
-			if dm, found := g.discovery.Snapshot().Lookup(payload.Model); found {
-				if _, provOk := currentCfg.Providers[dm.Provider]; provOk {
-					params = config.ModelParams{Provider: dm.Provider}
-					ok = true
-				}
+	var snap monitor.DiscoverySnapshot
+	if !ok && g.discovery != nil {
+		snap = g.discovery.Snapshot()
+		if dm, found := snap.Lookup(payload.Model); found {
+			if _, provOk := currentCfg.Providers[dm.Provider]; provOk {
+				params = config.ModelParams{Provider: dm.Provider}
+				ok = true
 			}
 		}
-		if !ok {
-			writeError(w, http.StatusNotFound, "invalid_request_error", "unknown model: "+payload.Model, "model_not_found")
-			return
-		}
 	}
-
-	if params.IsRemote() {
-		g.handleRemote(w, r, payload.Model, params, currentCfg)
+	if !ok {
+		writeError(w, http.StatusNotFound, "invalid_request_error", "unknown model: "+payload.Model, "model_not_found")
 		return
 	}
 
-	// LoadOrGet blocks until the model is healthy (or fails). The load context is
-	// detached from the caller's request context inside the manager, so a client
-	// disconnect does not abort an in-progress load that other requests may share.
+	if params.IsRemote() {
+		g.handleRemote(w, r, payload.Model, params, currentCfg, allBody)
+		return // handleRemote handles body rewrite if needed
+	}
+
 	addr, release, err := g.mgr.LoadOrGet(r.Context(), payload.Model, params)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -173,34 +202,25 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	// Context window guard: reject requests that would exceed 90% of n_ctx.
-	// Best-effort: skipped when hub is nil, n_ctx is unknown, or estimation fails.
 	if g.hub != nil {
 		if nCtx := g.hub.NCtx(payload.Model); nCtx > 0 {
-			if est := estimateTokens(captured.Bytes()); est > 0 {
-				if est > nCtx*9/10 {
-					writeError(w, http.StatusBadRequest, "invalid_request_error",
-						fmt.Sprintf("estimated %d tokens exceeds context window of %d (n_ctx)", est, nCtx),
-						"context_length_exceeded")
-					return
-				}
+			if est := estimateTokens(allBody); est > 0 && est > nCtx*9/10 {
+				writeError(w, http.StatusBadRequest, "invalid_request_error",
+					fmt.Sprintf("estimated %d tokens exceeds context window of %d (n_ctx)", est, nCtx),
+					"context_length_exceeded")
+				return
 			}
 		}
 	}
 
-	// Register affinity entry for the newly loaded model (idempotent for warmup models).
 	g.affinity.Register(payload.Model, params.Slots)
 
-	// Slot affinity: read full body, compute prefix hash, inject id_slot if assigned.
-	// On any error, fall through with the original body unchanged.
-	if allBody, readErr := io.ReadAll(r.Body); readErr == nil {
-		hash := prefixHash(allBody)
-		if slotID, assigned := g.affinity.Assign(payload.Model, hash); assigned {
-			allBody = injectSlot(allBody, slotID)
-		}
-		r.Body = io.NopCloser(bytes.NewReader(allBody))
-		r.ContentLength = int64(len(allBody))
+	hash := prefixHash(allBody)
+	if slotID, assigned := g.affinity.Assign(payload.Model, hash); assigned {
+		allBody = injectSlot(allBody, slotID)
 	}
+	r.Body = io.NopCloser(bytes.NewReader(allBody))
+	r.ContentLength = int64(len(allBody))
 
 	target, parseErr := url.Parse(addr)
 	if parseErr != nil {
@@ -229,114 +249,142 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 	type modelObj struct {
 		ID           string   `json:"id"`
 		Object       string   `json:"object"`
-		OwnedBy      string   `json:"owned_by"`
+		Type         string   `json:"type"`
 		Status       string   `json:"status,omitempty"`
 		Capabilities []string `json:"capabilities,omitempty"`
-		Local        bool     `json:"local"`
+		Provider     string   `json:"provider,omitempty"`
 	}
 	type modelsResp struct {
 		Object string     `json:"object"`
 		Data   []modelObj `json:"data"`
 	}
 
-	cfg := g.cfg.Load()
-
-	// Local models from the process manager.
-	models := g.mgr.ListModels()
+	models := g.Models()
 	data := make([]modelObj, 0, len(models))
-	for _, mi := range models {
-		obj := modelObj{
-			ID:      mi.ID,
-			Object:  "model",
-			OwnedBy: "wire",
-			Status:  mi.Status,
-			Local:   true,
-		}
-		if p, ok := cfg.MatchModel(mi.ID); ok {
-			obj.Capabilities = p.Capabilities
-		}
-		data = append(data, obj)
-	}
-
-	// Remote models from config.
-	configuredRemote := make(map[string]bool)
-	for pattern, p := range cfg.Models {
-		if !p.IsRemote() {
-			continue
-		}
-		configuredRemote[pattern] = true
+	for _, m := range models {
 		data = append(data, modelObj{
-			ID:           pattern,
-			Object:       "model",
-			OwnedBy:      p.Provider,
-			Status:       "available",
-			Capabilities: p.Capabilities,
-			Local:        false,
+			ID:           m.ID,
+			Object:       m.Object,
+			Type:         m.Type,
+			Status:       m.Status,
+			Capabilities: m.Capabilities,
+			Provider:     m.Provider,
 		})
-	}
-
-	// Discovered models from provider listings (skip duplicates with config).
-	if g.discovery != nil {
-		for _, dm := range g.discovery.Snapshot().AllModels() {
-			if configuredRemote[dm.ID] {
-				continue
-			}
-			data = append(data, modelObj{
-				ID:      dm.ID,
-				Object:  "model",
-				OwnedBy: dm.Provider,
-				Status:  "available",
-				Local:   false,
-			})
-		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(modelsResp{Object: "list", Data: data}) //nolint:errcheck
 }
 
+// Models returns all known models as ModelInfo slice.
+func (g *Gateway) Models() []monitor.ModelInfo {
+	cfg := g.cfg.Load()
+	var models []monitor.ModelInfo
+
+	// Local models from Manager (loaded/running)
+	localModels := g.mgr.ListModels()
+	for _, mi := range localModels {
+		obj := monitor.ModelInfo{
+			ID:     mi.ID,
+			Object: "model",
+			Type:   "local",
+			Status: mi.Status,
+		}
+		if p, ok := cfg.MatchModel(mi.ID); ok {
+			obj.Capabilities = p.Capabilities
+		}
+		models = append(models, obj)
+	}
+
+	listed := make(map[string]bool, len(models))
+	for _, m := range models {
+		listed[m.ID] = true
+	}
+
+	// HF cache models (local but not loaded)
+	for _, cm := range g.scanHFCache() {
+		if listed[cm] {
+			continue
+		}
+		models = append(models, monitor.ModelInfo{
+			ID:     cm,
+			Object: "model",
+			Type:   "local",
+			Status: "available",
+		})
+		listed[cm] = true
+	}
+
+	// Configured remote models
+	configuredRemote := make(map[string]bool)
+	for pattern, p := range cfg.Models {
+		if !p.IsRemote() {
+			continue
+		}
+		configuredRemote[pattern] = true
+		models = append(models, monitor.ModelInfo{
+			ID:           pattern,
+			Object:       "model",
+			Type:         "remote",
+			Status:       "available",
+			Capabilities: p.Capabilities,
+			Provider:     p.Provider,
+		})
+	}
+
+	// Discovered remote models
+	if g.discovery != nil {
+		for _, dm := range g.discovery.Snapshot().AllModels() {
+			if configuredRemote[dm.ID] {
+				continue
+			}
+			models = append(models, monitor.ModelInfo{
+				ID:       dm.ID,
+				Object:   "model",
+				Type:     "remote",
+				Status:   "available",
+				Provider: dm.Provider,
+			})
+		}
+	}
+
+	return models
+}
+
 // handleHealth returns 200 if at least one warmup model is healthy, 503 otherwise.
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	for _, name := range g.cfg.Load().Warmup {
-		if g.mgr.Loaded(name) {
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
-			return
-		}
+	if slices.ContainsFunc(g.cfg.Load().Warmup, g.mgr.Loaded) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
+		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
 	json.NewEncoder(w).Encode(map[string]string{"status": "degraded"}) //nolint:errcheck
 }
 
 // handleRemote proxies a request to a remote OpenAI-compatible provider,
-// bypassing the process manager entirely.
-func (g *Gateway) handleRemote(w http.ResponseWriter, r *http.Request, modelName string, params config.ModelParams, cfg *config.Config) {
+// bypassing the process manager entirely. body may be rewound if upstream_model rewrite is needed.
+func (g *Gateway) handleRemote(w http.ResponseWriter, r *http.Request, modelName string, params config.ModelParams, cfg *config.Config, body []byte) {
 	provider, ok := cfg.Providers[params.Provider]
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "server_error", "unknown provider: "+params.Provider, "config_error")
 		return
 	}
 
-	// Rewrite model field if upstream_model is set.
 	if params.UpstreamModel != "" {
-		allBody, err := io.ReadAll(r.Body)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "failed to read body", "bad_request")
-			return
-		}
 		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(allBody, &obj); err == nil {
+		if err := json.Unmarshal(body, &obj); err == nil {
 			if raw, err := json.Marshal(params.UpstreamModel); err == nil {
 				obj["model"] = raw
 				if rewritten, err := json.Marshal(obj); err == nil {
-					allBody = rewritten
+					body = rewritten
 				}
 			}
 		}
-		r.Body = io.NopCloser(bytes.NewReader(allBody))
-		r.ContentLength = int64(len(allBody))
 	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
 
 	baseTarget, err := url.Parse(provider.BaseURL)
 	if err != nil {
@@ -465,6 +513,93 @@ func rewriteContextLengthError(resp *http.Response) error {
 
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return nil
+}
+
+const hfCacheTTL = 30 * time.Second
+
+// scanHFCache returns cached model IDs (org/repo:QUANT) for all GGUF files
+// found in the HuggingFace hub cache. Results are cached for 30s to avoid
+// repeated filesystem I/O on /v1/models calls.
+func (g *Gateway) scanHFCache() []string {
+	if g.hfCacheDir == "" {
+		return nil
+	}
+	if ids, ok := g.hfCache.get(hfCacheTTL); ok {
+		return ids
+	}
+
+	entries, err := os.ReadDir(g.hfCacheDir)
+	if err != nil {
+		return nil
+	}
+
+	var models []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || !strings.HasPrefix(name, "models--") {
+			continue
+		}
+		// models--org--repo → org/repo
+		parts := strings.SplitN(name, "--", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		repo := parts[1] + "/" + parts[2]
+
+		// Walk snapshots for .gguf files.
+		snapshotsDir := filepath.Join(g.hfCacheDir, name, "snapshots")
+		snapshots, err := os.ReadDir(snapshotsDir)
+		if err != nil {
+			continue
+		}
+		seen := make(map[string]bool)
+		for _, snap := range snapshots {
+			if !snap.IsDir() {
+				continue
+			}
+			ggufs, err := filepath.Glob(filepath.Join(snapshotsDir, snap.Name(), "*.gguf"))
+			if err != nil {
+				continue
+			}
+			for _, path := range ggufs {
+				base := strings.TrimSuffix(filepath.Base(path), ".gguf")
+				// Skip auxiliary files (e.g. mmproj-BF16.gguf).
+				if strings.HasPrefix(base, "mmproj") {
+					continue
+				}
+				// Extract quant: look for Q prefix after the last dash-or-dot, but handle
+				// compound quants like Q5_K_M. The pattern is: model-name[-size]Q<num>[_<variant>]
+				// e.g. "Qwen3-4B-Q8_0" → "Q8_0", "Qwen3-4B-Q5_K_M" → "Q5_K_M"
+				quant := extractQuant(base)
+				if quant == "" {
+					continue
+				}
+				id := repo + ":" + quant
+				if !seen[id] {
+					seen[id] = true
+					models = append(models, id)
+				}
+			}
+		}
+	}
+	g.hfCache.set(models, hfCacheTTL)
+	return models
+}
+
+// extractQuant extracts the quantization suffix from a GGUF filename.
+// Handles patterns like "Qwen3-4B-Q8_0", "Qwen3-4B-Q5_K_M", "Phi-4-mini-instruct.Q8_0".
+// Returns empty string if no valid quant is found.
+func extractQuant(base string) string {
+	// Find last Q<num> and stop at -XB boundary (e.g., -4B, -8B)
+	for i := len(base) - 1; i >= 0; i-- {
+		if i > 0 && base[i] == 'B' && base[i-1] >= '0' && base[i-1] <= '9' {
+			break
+		}
+		if i+1 < len(base) && base[i] == 'Q' && base[i+1] >= '0' && base[i+1] <= '9' {
+			return base[i:]
+		}
+	}
+	return ""
 }
 
 // writeError writes an OpenAI-format JSON error response.

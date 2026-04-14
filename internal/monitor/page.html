@@ -121,6 +121,8 @@ body { background: var(--bg); color: var(--fg); font-family: ui-monospace, SFMon
 .model-name { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model-type { color: var(--muted); font-size: 10px; }
 .model-type.local { color: var(--green); }
+.model-type.loading { color: var(--warn); }
+.model-type.unloading { color: var(--warn); }
 .model-type.remote { color: var(--accent); }
 .model-type.discovered { color: var(--faint); }
 .model-provider { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -198,6 +200,7 @@ function connect() {
         case "state":     onState(msg);     break;
         case "remote":    onRemote(msg);    break;
         case "discovery": onDiscovery(msg); break;
+        case "models":    onModels(msg);    break;
       }
     } catch (_) {}
   };
@@ -241,7 +244,7 @@ function onSnapshot(msg) {
 
   modelState.locals = msg.locals || {};
   modelState.remote = msg.remote || {};
-  modelState.discovery = msg.discovery || {};
+  modelState.models = msg.models || [];
   renderModelList();
 }
 
@@ -461,10 +464,15 @@ function onRemote(msg) {
 
 // ── Model list ───────────────────────────────────────────────────────────────
 
-let modelState = { locals: {}, remote: {}, discovery: {} };
+let modelState = { locals: {}, remote: {}, models: [] };
 
 function onDiscovery(msg) {
   modelState.discovery = msg.discovery || {};
+  renderModelList();
+}
+
+function onModels(msg) {
+  modelState.models = msg.models || [];
   renderModelList();
 }
 
@@ -479,57 +487,27 @@ function renderModelList() {
   header.appendChild(span("", "status"));
   container.appendChild(header);
 
-  let count = 0;
-
-  // Local models.
-  for (const [name, b] of Object.entries(modelState.locals)) {
-    const row = div("model-row");
-    const nameEl = span("model-name", name);
-    nameEl.title = name;
-    row.appendChild(nameEl);
-    row.appendChild(span("model-type local", "local"));
-    row.appendChild(span("model-provider", "wire"));
-    row.appendChild(span("model-status " + (b.status || "unloaded"), b.status || "unloaded"));
-    container.appendChild(row);
-    count++;
-  }
-
-  // Configured remote models.
-  const remoteNames = new Set();
-  for (const [name, r] of Object.entries(modelState.remote)) {
-    remoteNames.add(name);
-    const row = div("model-row");
-    const nameEl = span("model-name", name);
-    nameEl.title = name;
-    row.appendChild(nameEl);
-    row.appendChild(span("model-type remote", "remote"));
-    row.appendChild(span("model-provider", r.provider || "\u2014"));
-    const info = (r.requests || 0) + " req" + (r.errors > 0 ? " \u00b7 " + r.errors + " err" : "");
-    row.appendChild(span("model-status available", info || "available"));
-    container.appendChild(row);
-    count++;
-  }
-
-  // Discovered models.
-  for (const [provider, d] of Object.entries(modelState.discovery)) {
-    for (const id of (d.models || [])) {
-      if (remoteNames.has(id)) continue;
-      const row = div("model-row");
-      const nameEl = span("model-name", id);
-      nameEl.title = id;
-      row.appendChild(nameEl);
-      row.appendChild(span("model-type discovered", "discovered"));
-      row.appendChild(span("model-provider", provider));
-      row.appendChild(span("model-status available", "available"));
-      container.appendChild(row);
-      count++;
-    }
-  }
-
-  if (count === 0) {
+  const models = modelState.models || [];
+  if (models.length === 0) {
     const empty = div("empty-state");
     empty.textContent = "no models available";
     container.appendChild(empty);
+    return;
+  }
+
+  for (const m of models) {
+    const row = div("model-row");
+    const nameEl = span("model-name", m.id);
+    nameEl.title = m.id;
+    row.appendChild(nameEl);
+
+    const typeLabel = m.type === "local" ? (m.status === "available" ? "local" : m.status) : "remote";
+    const typeClass = m.type === "local" ? (m.status === "available" ? "local" : m.status) : "remote";
+    row.appendChild(span("model-type " + typeClass, typeLabel));
+
+    row.appendChild(span("model-provider", m.provider || "\u2014"));
+    row.appendChild(span("model-status " + (m.status || "available"), m.status || "available"));
+    container.appendChild(row);
   }
 }
 

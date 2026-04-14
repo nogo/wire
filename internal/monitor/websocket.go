@@ -102,6 +102,7 @@ type snapMsg struct {
 	GPUs      []GPUMetrics                  `json:"gpus"`
 	Remote    map[string]remoteSnapInfo     `json:"remote,omitempty"`
 	Discovery map[string]discoveryWireEntry `json:"discovery,omitempty"`
+	Models    []ModelInfo                   `json:"models,omitempty"`
 }
 
 type localSnapInfo struct {
@@ -161,22 +162,24 @@ func buildSnapshotMsg(snap *HubSnapshot, statuses []BackendStatus) snapMsg {
 	}
 
 	var discovery map[string]discoveryWireEntry
-	if len(snap.Discovery.ByProvider) > 0 {
-		discovery = buildDiscoveryEntries(snap.Discovery.ByProvider)
+	if len(snap.Models) > 0 {
+		discovery = buildModelsEntries(snap.Models)
 	}
 
-	return snapMsg{Type: "snapshot", Locals: locals, GPUs: gpus, Remote: remote, Discovery: discovery}
+	return snapMsg{Type: "snapshot", Locals: locals, GPUs: gpus, Remote: remote, Discovery: discovery, Models: snap.Models}
 }
 
-func buildDiscoveryEntries(byProvider map[string][]DiscoveredModel) map[string]discoveryWireEntry {
-	out := make(map[string]discoveryWireEntry, len(byProvider))
-	for provider, models := range byProvider {
-		ids := make([]string, len(models))
-		for i, m := range models {
-			ids[i] = m.ID
+func buildModelsEntries(models []ModelInfo) map[string]discoveryWireEntry {
+	out := make(map[string]discoveryWireEntry)
+	byProvider := make(map[string][]string)
+	for _, m := range models {
+		if m.Type == "remote" && m.Provider != "" {
+			byProvider[m.Provider] = append(byProvider[m.Provider], m.ID)
 		}
+	}
+	for provider, ids := range byProvider {
 		out[provider] = discoveryWireEntry{
-			ModelCount: len(models),
+			ModelCount: len(ids),
 			Models:     ids,
 		}
 	}
@@ -242,10 +245,10 @@ type discoveryWireEntry struct {
 	Models     []string `json:"models"`
 }
 
-// discoveryWireMsg is the periodic discovery update.
-type discoveryWireMsg struct {
-	Type      string                        `json:"type"`
-	Discovery map[string]discoveryWireEntry `json:"discovery"`
+// modelsWireMsg is the periodic models update.
+type modelsWireMsg struct {
+	Type   string      `json:"type"`
+	Models []ModelInfo `json:"models"`
 }
 
 // toWireMsg converts a HubMessage to the JSON-serialisable wire type.
@@ -343,11 +346,11 @@ func toWireMsg(msg HubMessage) any {
 		}
 		return remoteWireMsg{Type: "remote", Remote: remote}
 
-	case MsgDiscoveryTick:
-		if msg.Discovery == nil || len(msg.Discovery.ByProvider) == 0 {
+	case MsgModelsTick:
+		if len(msg.Models) == 0 {
 			return nil
 		}
-		return discoveryWireMsg{Type: "discovery", Discovery: buildDiscoveryEntries(msg.Discovery.ByProvider)}
+		return modelsWireMsg{Type: "models", Models: msg.Models}
 
 	default:
 		return nil
