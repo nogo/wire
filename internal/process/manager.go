@@ -784,9 +784,16 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 				return
 			}
 
+			oomKilled := false
 			if exitErr != nil {
 				if ee, ok := errors.AsType[*exec.ExitError](exitErr); ok {
-					m.log.Warn("process exited unexpectedly", "model", modelName, "exit_code", ee.ExitCode())
+					// OOM killer sends SIGKILL — detect via WaitStatus.
+					if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signal() == syscall.SIGKILL {
+						oomKilled = true
+						m.log.Error("process killed by SIGKILL (likely OOM)", "model", modelName)
+					} else {
+						m.log.Warn("process exited unexpectedly", "model", modelName, "exit_code", ee.ExitCode())
+					}
 				} else {
 					m.log.Warn("process exited unexpectedly", "model", modelName, "error", exitErr)
 				}
@@ -798,6 +805,17 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 				delete(m.procs, modelName)
 				m.mu.Unlock()
 				return
+			}
+
+			// OOM: back off longer to let the system recover before reloading.
+			if oomKilled {
+				oomDelay := 30 * time.Second
+				m.log.Warn("delaying restart after OOM kill", "model", modelName, "delay", oomDelay)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(oomDelay):
+				}
 			}
 		}
 		// Warmup model: fall through to retry loop.
