@@ -16,7 +16,7 @@ func buildFakeSysfs(t *testing.T, root string, index int, values map[string]stri
 	deviceDir := filepath.Join(cardDir, "device")
 	hwmonDir := filepath.Join(deviceDir, "hwmon", "hwmon0")
 	for _, dir := range []string{deviceDir, hwmonDir} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("MkdirAll %s: %v", dir, err)
 		}
 	}
@@ -28,7 +28,7 @@ func buildFakeSysfs(t *testing.T, root string, index int, values map[string]stri
 		default:
 			path = filepath.Join(deviceDir, name)
 		}
-		if err := os.WriteFile(path, []byte(val+"\n"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(val+"\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile %s: %v", name, err)
 		}
 	}
@@ -178,7 +178,7 @@ func TestReadGPUMetrics_hwmonResolve(t *testing.T) {
 func TestGPUName_uevent(t *testing.T) {
 	dir := t.TempDir()
 	uevent := "DRIVER=amdgpu\nPCI_SLOT_NAME=0000:03:00.0\nMODALIAS=pci:foo\n"
-	if err := os.WriteFile(filepath.Join(dir, "uevent"), []byte(uevent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "uevent"), []byte(uevent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	name := gpuName(dir, 1)

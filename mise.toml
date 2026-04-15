@@ -1,5 +1,5 @@
 [tools]
-go = "1.26.1"
+go = "1.26.2"
 
 [env]
 MODULE  = "github.com/nogo/wire"
@@ -32,18 +32,19 @@ outputs = { auto = true }
 run = "go vet ./..."
 
 [tasks.fmt]
-description = "Apply gofmt formatting"
-run = "gofmt -w ."
+description = "Apply gofumpt formatting"
+run = "gofumpt -w ."
 
 [tasks."fmt:check"]
-description = "Fail if any .go files are unformatted"
+description = "Apply gofumpt, then fail if any files were modified"
+depends = ["fmt"]
 sources = ["**/*.go"]
 outputs = { auto = true }
 run = """
-UNFORMATTED=$(gofmt -l .)
-if [[ -n "$UNFORMATTED" ]]; then
-    echo "FAIL: unformatted files:"
-    echo "$UNFORMATTED"
+DIRTY=$(git diff --name-only -- '*.go')
+if [[ -n "$DIRTY" ]]; then
+    echo "FAIL: gofumpt modified files (now fixed, stage and re-commit):"
+    echo "$DIRTY"
     exit 1
 fi
 """
@@ -70,9 +71,25 @@ else
 fi
 """
 
+[tasks.errorlint]
+description = "Check error handling uses errors.Is/As"
+sources = ["**/*.go", "go.mod"]
+outputs = { auto = true }
+run = 'go-errorlint ./...'
+
+[tasks.vulncheck]
+description = "Check dependencies for known vulnerabilities"
+run = """
+govulncheck ./... 2>&1
+RC=$?
+if [[ $RC -ne 0 ]]; then
+    echo "WARN: govulncheck found vulnerabilities (see above)"
+fi
+"""
+
 [tasks.check]
-description = "Full local verification: vet, fmt, tidy, test, lint"
-depends = ["vet", "fmt:check", "tidy", "test", "lint"]
+description = "Full local verification: vet, fmt, tidy, test, lint, errorlint, vulncheck"
+depends = ["vet", "fmt:check", "tidy", "test", "lint", "errorlint", "vulncheck"]
 run = 'echo "All checks passed."'
 
 [tasks.verify]
@@ -106,6 +123,14 @@ systemctl --user disable wire || true
 rm -f "$HOME/.local/bin/wire"
 rm -f "$HOME/.config/systemd/user/wire.service"
 systemctl --user daemon-reload
+"""
+
+[tasks.update]
+description = "Update Go dependencies to latest minor/patch versions"
+run = """
+go get -u ./...
+go mod tidy
+echo "Dependencies updated. Review changes with: git diff go.mod go.sum"
 """
 
 [tasks.dev]
