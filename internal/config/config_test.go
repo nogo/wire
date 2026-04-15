@@ -64,7 +64,7 @@ warmup:
 }
 
 func TestLoad_ExplicitValues(t *testing.T) {
-	path := writeConfig(t, `
+	_ = writeConfig(t, `
 listen: ":9090"
 monitor: true
 max_models: 3
@@ -83,7 +83,7 @@ warmup:
 `)
 	// max_models=3 and 3 warmup entries — valid, but model-C has no pattern match.
 	// Use a valid config instead.
-	path = writeConfig(t, `
+	path := writeConfig(t, `
 listen: ":9090"
 monitor: true
 max_models: 2

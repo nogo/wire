@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // HandleWS returns an HTTP handler that upgrades to WebSocket and streams hub

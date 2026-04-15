@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -511,7 +512,7 @@ func TestLoadOrGet_ContextCancellation(t *testing.T) {
 	_, _, err := m.LoadOrGet(cancelCtx, "org/model-a", params)
 	if err == nil {
 		t.Log("first request: LoadOrGet returned before context cancelled (load was fast)")
-	} else if err != context.Canceled {
+	} else if !errors.Is(err, context.Canceled) {
 		t.Fatalf("first request: expected context.Canceled, got %v", err)
 	}
 

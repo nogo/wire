@@ -3,9 +3,9 @@ module github.com/nogo/wire
 go 1.26.2
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	gopkg.in/yaml.v3 v3.0.1
-	nhooyr.io/websocket v1.8.17
 )
 
 require (
