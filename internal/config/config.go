@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,7 +199,9 @@ func validate(cfg *Config) error {
 		}
 	}
 
-	// Validate warmup entries.
+	// Validate warmup entries. Unmatched entries are dropped with a warning so
+	// the daemon still starts when a model has been removed from the config.
+	kept := cfg.Warmup[:0]
 	for _, entry := range cfg.Warmup {
 		var matches int
 		for pattern, p := range cfg.Models {
@@ -211,12 +214,15 @@ func validate(cfg *Config) error {
 			}
 		}
 		if matches == 0 {
-			return fmt.Errorf("warmup entry %q does not match any model pattern", entry)
+			slog.Warn("warmup entry does not match any model pattern; skipping", "entry", entry)
+			continue
 		}
 		if matches > 1 {
 			return fmt.Errorf("warmup entry %q matches %d model patterns (expected 1)", entry, matches)
 		}
+		kept = append(kept, entry)
 	}
+	cfg.Warmup = kept
 	if len(cfg.Warmup) > cfg.MaxModels {
 		return fmt.Errorf("warmup list length %d exceeds max_models %d", len(cfg.Warmup), cfg.MaxModels)
 	}

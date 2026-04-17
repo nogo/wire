@@ -24,13 +24,15 @@ models:
 warmup:
   - "org/model"
 `
-	// Valid YAML that fails our custom validation (warmup entry has no matching pattern).
+	// Valid YAML that fails our custom validation (warmup entry matches multiple patterns).
 	invalidWatchYAML = `
 models:
-  "org/model-A":
+  "org/*":
+    context: 4096
+  "*/model-A":
     context: 4096
 warmup:
-  - "org/model-B"
+  - "org/model-A"
 `
 )
 

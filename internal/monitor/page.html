@@ -130,6 +130,20 @@ body { background: var(--bg); color: var(--fg); font-family: ui-monospace, SFMon
 .model-status.loaded { color: var(--green); }
 .model-status.available { color: var(--green); }
 .model-status.unloaded { color: var(--faint); }
+
+.copy-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0; margin-right: 6px;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-subtle); border-radius: 3px;
+  cursor: pointer; font-family: inherit; font-size: 10px; line-height: 1;
+  vertical-align: middle; flex-shrink: 0;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.copy-btn.copied { color: var(--green); border-color: var(--green); }
+.card-header .card-name { display: inline-flex; align-items: center; }
+.model-name { display: flex; align-items: center; }
+.model-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -171,6 +185,39 @@ function span(cls, text) {
   return e;
 }
 function div(cls) { return el("div", cls); }
+
+function copyBtn(text) {
+  const b = el("button", "copy-btn");
+  b.type = "button";
+  b.title = "copy \"" + text + "\"";
+  b.setAttribute("aria-label", "copy " + text);
+  b.textContent = "\u29c9";
+  b.addEventListener("click", ev => {
+    ev.stopPropagation();
+    const done = () => {
+      b.classList.add("copied");
+      b.textContent = "\u2713";
+      setTimeout(() => { b.classList.remove("copied"); b.textContent = "\u29c9"; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+    } else {
+      fallbackCopy(text, done);
+    }
+  });
+  return b;
+}
+
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); done(); } catch (_) {}
+  document.body.removeChild(ta);
+}
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -314,7 +361,10 @@ function buildLocalCard(name, b) {
   card.id = "local-" + name;
 
   const header = div("card-header");
-  header.appendChild(span("card-name", name));
+  const nameWrap = span("card-name");
+  nameWrap.appendChild(copyBtn(name));
+  nameWrap.appendChild(document.createTextNode(name));
+  header.appendChild(nameWrap);
   const badge = span("badge " + status + " b-badge", status);
   header.appendChild(badge);
   card.appendChild(header);
@@ -417,7 +467,10 @@ function buildRemoteCard(name, r) {
   card.id = "remote-" + name;
 
   const header = div("card-header");
-  header.appendChild(span("card-name", name));
+  const nameWrap = span("card-name");
+  nameWrap.appendChild(copyBtn(name));
+  nameWrap.appendChild(document.createTextNode(name));
+  header.appendChild(nameWrap);
   const provBadge = span("card-sub", "");
   provBadge.style.marginBottom = "0";
   provBadge.textContent = r.provider || "\u2014";
@@ -497,8 +550,11 @@ function renderModelList() {
 
   for (const m of models) {
     const row = div("model-row");
-    const nameEl = span("model-name", m.id);
-    nameEl.title = m.id;
+    const nameEl = span("model-name");
+    nameEl.appendChild(copyBtn(m.id));
+    const nameText = span("model-name-text", m.id);
+    nameText.title = m.id;
+    nameEl.appendChild(nameText);
     row.appendChild(nameEl);
 
     const typeLabel = m.type === "local" ? (m.status === "available" ? "local" : m.status) : "remote";

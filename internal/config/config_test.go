@@ -191,16 +191,17 @@ models:
   "org/model-A":
     context: 4096
 warmup:
+  - "org/model-A"
   - "org/model-B"
 `)
 	setEnv(t, "WIRE_CONFIG", path)
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected validation error, got nil")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !contains(err.Error(), "org/model-B") {
-		t.Errorf("error should mention org/model-B, got: %v", err)
+	if len(cfg.Warmup) != 1 || cfg.Warmup[0] != "org/model-A" {
+		t.Errorf("unmatched warmup entry should be dropped, got: %v", cfg.Warmup)
 	}
 }
 
