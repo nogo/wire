@@ -11,16 +11,13 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/gateway/queue"
+	"github.com/nogo/wire/internal/modelindex"
 	"github.com/nogo/wire/internal/monitor"
 	"github.com/nogo/wire/internal/process"
 )
@@ -43,34 +40,12 @@ type nctxProvider interface {
 type processManager interface {
 	Loaded(name string) bool
 	// LoadOrGet returns a ticket for the named model, loading it on demand if
-	// not already running. The caller waits on ticket.Ready() for the backend
+	// not already running. modelPath is the resolved GGUF file path; empty means
+	// use -hf modelName. The caller waits on ticket.Ready() for the backend
 	// address and must call ticket.Release() when the request completes.
-	LoadOrGet(modelName string, params config.ModelParams) *process.LoadTicket
+	LoadOrGet(modelName string, modelPath string, params config.ModelParams) *process.LoadTicket
 	// ListModels returns all known models in non-idle states.
 	ListModels() []monitor.ModelInfo
-}
-
-// hfCache caches HF model IDs with a TTL to avoid repeated filesystem I/O.
-type hfCache struct {
-	mu    sync.Mutex
-	ids   []string
-	until time.Time
-}
-
-func (c *hfCache) get(ttl time.Duration) ([]string, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if time.Now().Before(c.until) {
-		return c.ids, true
-	}
-	return nil, false
-}
-
-func (c *hfCache) set(ids []string, ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.ids = ids
-	c.until = time.Now().Add(ttl)
 }
 
 // Gateway is an HTTP reverse-proxy that routes OpenAI-compatible requests to llama-server processes.
@@ -83,24 +58,20 @@ type Gateway struct {
 	hub            nctxProvider
 	remote         *monitor.RemoteTracker
 	discovery      *monitor.ModelDiscovery
+	idx            *modelindex.Index
 	server         *http.Server
-	hfCacheDir     string        // HuggingFace hub cache directory; empty disables scanning
-	hfCache        hfCache       // cached HF model IDs
 	warmupInterval time.Duration // 0 → warmupRetryInterval; overridden in tests
 }
 
 // New creates a Gateway backed by the given process manager.
 // hub may be nil; when non-nil, /monitor and /monitor/ws routes are registered.
 // remote may be nil; when non-nil, remote provider requests are tracked.
-func New(cfg *config.Config, mgr *process.Manager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, log *slog.Logger) *Gateway {
-	g := newGateway(cfg, mgr, hub, remote, discovery, log)
-	if home, err := os.UserHomeDir(); err == nil {
-		g.hfCacheDir = filepath.Join(home, ".cache", "huggingface", "hub")
-	}
-	return g
+// idx may be nil; when non-nil, model discovery is used for /v1/models listing and routing.
+func New(cfg *config.Config, mgr *process.Manager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, idx *modelindex.Index, log *slog.Logger) *Gateway {
+	return newGateway(cfg, mgr, hub, remote, discovery, idx, log)
 }
 
-func newGateway(cfg *config.Config, mgr processManager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, log *slog.Logger) *Gateway {
+func newGateway(cfg *config.Config, mgr processManager, hub *monitor.Hub, remote *monitor.RemoteTracker, discovery *monitor.ModelDiscovery, idx *modelindex.Index, log *slog.Logger) *Gateway {
 	// Build affinity table from warmup models.
 	modelSlots := make(map[string]int, len(cfg.Warmup))
 	for _, name := range cfg.Warmup {
@@ -109,7 +80,7 @@ func newGateway(cfg *config.Config, mgr processManager, hub *monitor.Hub, remote
 		}
 	}
 
-	g := &Gateway{mgr: mgr, log: log, affinity: newAffinityTable(modelSlots), remote: remote, discovery: discovery}
+	g := &Gateway{mgr: mgr, log: log, affinity: newAffinityTable(modelSlots), remote: remote, discovery: discovery, idx: idx}
 	g.cfg.Store(cfg)
 
 	qDepth := cfg.QueueDepth
@@ -121,7 +92,11 @@ func newGateway(cfg *config.Config, mgr processManager, hub *monitor.Hub, remote
 		if !ok {
 			return "", nil, fmt.Errorf("unknown model: %s", model)
 		}
-		t := g.mgr.LoadOrGet(model, params)
+		var modelPath string
+		if g.idx != nil {
+			modelPath, _, _ = g.idx.Lookup(model)
+		}
+		t := g.mgr.LoadOrGet(model, modelPath, params)
 		select {
 		case addr, ok := <-t.Ready():
 			if !ok {
@@ -420,18 +395,20 @@ func (g *Gateway) Models() []monitor.ModelInfo {
 		listed[m.ID] = true
 	}
 
-	// HF cache models (local but not loaded)
-	for _, cm := range g.scanHFCache() {
-		if listed[cm] {
-			continue
+	// Index-discovered models (local dirs + HF cache, not yet loaded)
+	if g.idx != nil {
+		for _, e := range g.idx.List() {
+			if listed[e.Name] {
+				continue
+			}
+			models = append(models, monitor.ModelInfo{
+				ID:     e.Name,
+				Object: "model",
+				Type:   "local",
+				Status: "available",
+			})
+			listed[e.Name] = true
 		}
-		models = append(models, monitor.ModelInfo{
-			ID:     cm,
-			Object: "model",
-			Type:   "local",
-			Status: "available",
-		})
-		listed[cm] = true
 	}
 
 	// Configured remote models
@@ -632,93 +609,6 @@ func rewriteContextLengthError(resp *http.Response) error {
 
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return nil
-}
-
-const hfCacheTTL = 30 * time.Second
-
-// scanHFCache returns cached model IDs (org/repo:QUANT) for all GGUF files
-// found in the HuggingFace hub cache. Results are cached for 30s to avoid
-// repeated filesystem I/O on /v1/models calls.
-func (g *Gateway) scanHFCache() []string {
-	if g.hfCacheDir == "" {
-		return nil
-	}
-	if ids, ok := g.hfCache.get(hfCacheTTL); ok {
-		return ids
-	}
-
-	entries, err := os.ReadDir(g.hfCacheDir)
-	if err != nil {
-		return nil
-	}
-
-	var models []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if !entry.IsDir() || !strings.HasPrefix(name, "models--") {
-			continue
-		}
-		// models--org--repo → org/repo
-		parts := strings.SplitN(name, "--", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		repo := parts[1] + "/" + parts[2]
-
-		// Walk snapshots for .gguf files.
-		snapshotsDir := filepath.Join(g.hfCacheDir, name, "snapshots")
-		snapshots, err := os.ReadDir(snapshotsDir)
-		if err != nil {
-			continue
-		}
-		seen := make(map[string]bool)
-		for _, snap := range snapshots {
-			if !snap.IsDir() {
-				continue
-			}
-			ggufs, err := filepath.Glob(filepath.Join(snapshotsDir, snap.Name(), "*.gguf"))
-			if err != nil {
-				continue
-			}
-			for _, path := range ggufs {
-				base := strings.TrimSuffix(filepath.Base(path), ".gguf")
-				// Skip auxiliary files (e.g. mmproj-BF16.gguf).
-				if strings.HasPrefix(base, "mmproj") {
-					continue
-				}
-				// Extract quant: look for Q prefix after the last dash-or-dot, but handle
-				// compound quants like Q5_K_M. The pattern is: model-name[-size]Q<num>[_<variant>]
-				// e.g. "Qwen3-4B-Q8_0" → "Q8_0", "Qwen3-4B-Q5_K_M" → "Q5_K_M"
-				quant := extractQuant(base)
-				if quant == "" {
-					continue
-				}
-				id := repo + ":" + quant
-				if !seen[id] {
-					seen[id] = true
-					models = append(models, id)
-				}
-			}
-		}
-	}
-	g.hfCache.set(models, hfCacheTTL)
-	return models
-}
-
-// extractQuant extracts the quantization suffix from a GGUF filename.
-// Handles patterns like "Qwen3-4B-Q8_0", "Qwen3-4B-Q5_K_M", "Phi-4-mini-instruct.Q8_0".
-// Returns empty string if no valid quant is found.
-func extractQuant(base string) string {
-	// Find last Q<num> and stop at -XB boundary (e.g., -4B, -8B)
-	for i := len(base) - 1; i >= 0; i-- {
-		if i > 0 && base[i] == 'B' && base[i-1] >= '0' && base[i-1] <= '9' {
-			break
-		}
-		if i+1 < len(base) && base[i] == 'Q' && base[i+1] >= '0' && base[i+1] <= '9' {
-			return base[i:]
-		}
-	}
-	return ""
 }
 
 // pathPriority maps a request path to a queue priority tier.

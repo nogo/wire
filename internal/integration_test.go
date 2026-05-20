@@ -94,7 +94,7 @@ func TestHotReload_HelperProcess(t *testing.T) {
 
 // integrationCmdBuilder returns a cmdBuilder that runs the current test binary
 // as a fake llama-server subprocess via TestHotReload_HelperProcess.
-func integrationCmdBuilder(ctx context.Context, _ string, _ config.ModelParams) *exec.Cmd {
+func integrationCmdBuilder(ctx context.Context, _ string, _ string, _ config.ModelParams) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHotReload_HelperProcess")
 	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 	return cmd
@@ -103,8 +103,8 @@ func integrationCmdBuilder(ctx context.Context, _ string, _ config.ModelParams) 
 // integrationCmdBuilderWithDelay is like integrationCmdBuilder but the health
 // endpoint sleeps for delayMs milliseconds before responding 200. Used to
 // exercise the "concurrent requests coalesce" scenario.
-func integrationCmdBuilderWithDelay(delayMs int) func(context.Context, string, config.ModelParams) *exec.Cmd {
-	return func(ctx context.Context, _ string, _ config.ModelParams) *exec.Cmd {
+func integrationCmdBuilderWithDelay(delayMs int) func(context.Context, string, string, config.ModelParams) *exec.Cmd {
+	return func(ctx context.Context, _ string, _ string, _ config.ModelParams) *exec.Cmd {
 		cmd := exec.CommandContext(ctx, os.Args[0],
 			"-test.run=TestHotReload_HelperProcess",
 			"--",
@@ -170,7 +170,7 @@ func TestHotReload_ParamChangeTriggersRestart(t *testing.T) {
 	// Warmup goes through gateway; load model-a explicitly here.
 	var addrBefore string
 	{
-		ticket := m.LoadOrGet("org/model-a", cfg.Models["org/model-a"])
+		ticket := m.LoadOrGet("org/model-a", "", cfg.Models["org/model-a"])
 		select {
 		case addr, ok := <-ticket.Ready():
 			if !ok {
@@ -226,7 +226,7 @@ func TestHotReload_UnchangedConfigIsNoop(t *testing.T) {
 	// Warmup goes through gateway; load model-a explicitly here.
 	var addrBefore string
 	{
-		ticket := m.LoadOrGet("org/model-a", cfg.Models["org/model-a"])
+		ticket := m.LoadOrGet("org/model-a", "", cfg.Models["org/model-a"])
 		select {
 		case addr, ok := <-ticket.Ready():
 			if !ok {
@@ -350,7 +350,7 @@ func TestHotReload_GatewayRoutesAfterUpdate(t *testing.T) {
 	}
 	defer mgr.Stop() //nolint:errcheck
 
-	gw := gateway.New(cfg, mgr, nil, nil, nil, slog.Default())
+	gw := gateway.New(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	gwCtx, gwCancel := context.WithCancel(ctx)
 	defer gwCancel()
@@ -438,7 +438,7 @@ func TestIntegration_CoalescedLoading(t *testing.T) {
 		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 1}},
 		MaxModels: 1,
 	}
-	gw := gateway.New(gwCfg, m, nil, nil, nil, slog.Default())
+	gw := gateway.New(gwCfg, m, nil, nil, nil, nil, slog.Default())
 
 	gwCtx, gwCancel := context.WithCancel(ctx)
 	defer gwCancel()
@@ -534,7 +534,7 @@ func TestIntegration_QueuePriorityRouting(t *testing.T) {
 		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 4}},
 		MaxModels: 1,
 	}
-	gw := gateway.New(gwCfg, m, nil, nil, nil, slog.Default())
+	gw := gateway.New(gwCfg, m, nil, nil, nil, nil, slog.Default())
 
 	gwCtx, gwCancel := context.WithCancel(ctx)
 	defer gwCancel()
@@ -587,7 +587,7 @@ func TestIntegration_DrainAndRequeue(t *testing.T) {
 	defer m.Stop() //nolint:errcheck
 
 	// Initial load via ticket API.
-	ticket := m.LoadOrGet("org/model-a", cfg.Models["org/model-a"])
+	ticket := m.LoadOrGet("org/model-a", "", cfg.Models["org/model-a"])
 	select {
 	case addr, ok := <-ticket.Ready():
 		if !ok {
@@ -626,7 +626,7 @@ func TestIntegration_DrainAndRequeue(t *testing.T) {
 	// Re-add model-a to config; new request should trigger a fresh load.
 	m.Reload(cfg)
 
-	ticket2 := m.LoadOrGet("org/model-a", cfg.Models["org/model-a"])
+	ticket2 := m.LoadOrGet("org/model-a", "", cfg.Models["org/model-a"])
 	select {
 	case addr, ok := <-ticket2.Ready():
 		if !ok {

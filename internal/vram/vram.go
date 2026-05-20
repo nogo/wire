@@ -10,10 +10,15 @@ import (
 	"github.com/nogo/wire/internal/monitor"
 )
 
+// modelResolver resolves a model name to its GGUF file path for size estimation.
+type modelResolver interface {
+	FilePath(name string) string
+}
+
 // Tracker manages VRAM budget tracking, admission control, and sysfs reconciliation.
 type Tracker struct {
 	backend      Backend
-	hfCache      *HFCache
+	resolver     modelResolver
 	estimates    sync.Map // modelRef → uint64 (VRAM estimate bytes)
 	reservations sync.Map // modelRef → uint64 (reserved bytes)
 	pending      sync.Map // modelRef → uint64 (pending release, waiting for sysfs confirmation)
@@ -28,22 +33,18 @@ type Tracker struct {
 	wg     sync.WaitGroup
 }
 
-// New creates a Tracker with the given backend and HF cache scanner.
-// Call Discover() then Start() to begin tracking.
-func New(backend Backend, hfCache *HFCache) *Tracker {
+// New creates a Tracker with the given backend and optional model resolver.
+// resolver may be nil; when non-nil, it is used to resolve GGUF file paths for
+// VRAM estimation. Call Discover() then Start() to begin tracking.
+func New(backend Backend, resolver modelResolver) *Tracker {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Tracker{
 		backend:    backend,
-		hfCache:    hfCache,
+		resolver:   resolver,
 		gpuStateCh: make(chan []monitor.GPUMetrics, 64),
 		ctx:        ctx,
 		cancel:     cancel,
 	}
-}
-
-// HFCache returns the HF cache scanner for manual scanning if needed.
-func (t *Tracker) HFCache() *HFCache {
-	return t.hfCache
 }
 
 // Discover runs the backend auto-detection chain and populates totalVRAM.
@@ -130,17 +131,19 @@ func (t *Tracker) Release(model string) {
 }
 
 // EstimateForModel returns the VRAM estimate for a model reference.
-// It checks the HF cache scan first, then tries to stat the path directly.
+// It checks the resolver first (file-size based), then falls back to
+// a cached estimate or a placeholder based on the model name.
 func (t *Tracker) EstimateForModel(modelRef string) uint64 {
-	if t.hfCache != nil {
-		if v := t.hfCache.Estimate(modelRef); v > 0 {
-			return v
+	if t.resolver != nil {
+		if p := t.resolver.FilePath(modelRef); p != "" {
+			if est, err := EstimateVRAM(p); err == nil {
+				return est
+			}
 		}
 	}
 	if v, ok := t.estimates.Load(modelRef); ok {
 		return v.(uint64)
 	}
-	// Try placeholder based on model name.
 	if v := PlaceholderVRAM(modelRef); v > 0 {
 		t.estimates.Store(modelRef, v)
 		return v

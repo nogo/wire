@@ -368,12 +368,11 @@ models:
 	}
 }
 
-func TestLoad_SpecType(t *testing.T) {
+func TestLoad_KVType(t *testing.T) {
 	path := writeConfig(t, `
 models:
   "org/model":
-    spec_type: "ngram-mod"
-    draft_max: 16
+    kv_type: "q8_0"
 `)
 	setEnv(t, "WIRE_CONFIG", path)
 
@@ -382,19 +381,16 @@ models:
 		t.Fatalf("unexpected error: %v", err)
 	}
 	p := cfg.Models["org/model"]
-	if p.SpecType != "ngram-mod" {
-		t.Errorf("spec_type: got %q, want %q", p.SpecType, "ngram-mod")
-	}
-	if p.DraftMax != 16 {
-		t.Errorf("draft_max: got %d, want 16", p.DraftMax)
+	if p.KVType != "q8_0" {
+		t.Errorf("kv_type: got %q, want %q", p.KVType, "q8_0")
 	}
 }
 
-func TestLoad_SpecTypeInvalid(t *testing.T) {
+func TestLoad_KVTypeInvalid(t *testing.T) {
 	path := writeConfig(t, `
 models:
   "org/model":
-    spec_type: "unknown"
+    kv_type: "bf16"
 `)
 	setEnv(t, "WIRE_CONFIG", path)
 
@@ -402,12 +398,12 @@ models:
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
-	if !contains(err.Error(), "unknown") {
+	if !contains(err.Error(), "bf16") {
 		t.Errorf("error should mention invalid value, got: %v", err)
 	}
 }
 
-func TestLoad_SpecTypeEmpty(t *testing.T) {
+func TestLoad_NoKVType(t *testing.T) {
 	path := writeConfig(t, `
 models:
   "org/model":
@@ -420,8 +416,31 @@ models:
 		t.Fatalf("unexpected error: %v", err)
 	}
 	p := cfg.Models["org/model"]
-	if p.SpecType != "" || p.DraftMax != 0 || p.DraftMin != 0 || p.SpecNgramN != 0 || p.SpecNgramM != 0 {
-		t.Errorf("expected zero spec fields, got: %+v", p)
+	if p.KVType != "" {
+		t.Errorf("expected empty kv_type, got: %q", p.KVType)
+	}
+}
+
+func TestLoad_ModelDirs(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, `
+model_dirs:
+  - `+dir+`
+models:
+  "org/model":
+    context: 2048
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.ModelDirs) != 1 {
+		t.Fatalf("model_dirs: got %d entries, want 1", len(cfg.ModelDirs))
+	}
+	if cfg.ModelDirs[0] != dir {
+		t.Errorf("model_dirs[0]: got %q, want %q", cfg.ModelDirs[0], dir)
 	}
 }
 
@@ -574,6 +593,28 @@ models:
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected validation error for remote model with local fields")
+	}
+	if !contains(err.Error(), "local-only") {
+		t.Errorf("error should mention local-only fields, got: %v", err)
+	}
+}
+
+func TestLoad_RemoteWithKVType(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  test:
+    base_url: https://example.com
+    api_key: key
+models:
+  "model":
+    provider: test
+    kv_type: "q8_0"
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error for remote model with kv_type")
 	}
 	if !contains(err.Error(), "local-only") {
 		t.Errorf("error should mention local-only fields, got: %v", err)

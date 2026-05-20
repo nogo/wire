@@ -32,7 +32,7 @@ func (m *mockManager) Loaded(name string) bool {
 	return m.loaded[name]
 }
 
-func (m *mockManager) LoadOrGet(name string, _ config.ModelParams) *process.LoadTicket {
+func (m *mockManager) LoadOrGet(name string, _ string, _ config.ModelParams) *process.LoadTicket {
 	var addr string
 	var rel func()
 	var err error
@@ -88,7 +88,7 @@ func TestGateway_Health(t *testing.T) {
 			addrs:  map[string]string{"org/model": "http://localhost:9999"},
 			loaded: map[string]bool{"org/model": true},
 		}
-		g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+		g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 		w := httptest.NewRecorder()
 		g.handleHealth(w, httptest.NewRequest(http.MethodGet, "/health", nil))
 		if w.Code != http.StatusOK {
@@ -101,7 +101,7 @@ func TestGateway_Health(t *testing.T) {
 			addrs:  map[string]string{},
 			loaded: map[string]bool{"org/model": false},
 		}
-		g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+		g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 		w := httptest.NewRecorder()
 		g.handleHealth(w, httptest.NewRequest(http.MethodGet, "/health", nil))
 		if w.Code != http.StatusServiceUnavailable {
@@ -112,7 +112,7 @@ func TestGateway_Health(t *testing.T) {
 
 func TestGateway_HandleRoute_UnknownModel(t *testing.T) {
 	cfg := testConfig("org/model", 1, "")
-	g := newGateway(cfg, &mockManager{}, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -126,7 +126,7 @@ func TestGateway_HandleRoute_UnknownModel(t *testing.T) {
 
 func TestGateway_HandleRoute_MissingModel(t *testing.T) {
 	cfg := testConfig("org/model", 1, "")
-	g := newGateway(cfg, &mockManager{}, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -146,7 +146,7 @@ func TestGateway_HandleRoute_ModelNotLoaded(t *testing.T) {
 			return "", func() {}, &unavailableError{name}
 		},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -173,7 +173,7 @@ func TestGateway_HandleRoute_Proxy(t *testing.T) {
 		addrs:  map[string]string{"org/model": backend.URL},
 		loaded: map[string]bool{"org/model": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -208,7 +208,7 @@ func TestGateway_HandleRoute_BodyPreserved(t *testing.T) {
 		addrs:  map[string]string{"org/model": backend.URL},
 		loaded: map[string]bool{"org/model": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	// Use empty messages so prefixHash returns 0 and no id_slot is injected,
 	// allowing us to verify the body passes through unchanged.
@@ -241,7 +241,7 @@ func TestGateway_HandleRoute_GlobMatch(t *testing.T) {
 		addrs:  map[string]string{"org/Qwen3-8B": backend.URL},
 		loaded: map[string]bool{"org/Qwen3-8B": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -270,7 +270,7 @@ func TestGateway_Models(t *testing.T) {
 			{ID: "org/model", Status: "loaded"},
 		},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	g.handleModels(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -328,7 +328,7 @@ func TestHandleRoute_contextGuard_reject(t *testing.T) {
 		addrs:  map[string]string{"org/model": backend.URL},
 		loaded: map[string]bool{"org/model": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 	g.hub = &mockHub{nctx: map[string]int{"org/model": 100}}
 
 	// 400 chars of content → 100 estimated tokens > 90% of 100 (threshold = 90).
@@ -363,7 +363,7 @@ func TestHandleRoute_contextGuard_pass(t *testing.T) {
 		addrs:  map[string]string{"org/model": backend.URL},
 		loaded: map[string]bool{"org/model": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 	g.hub = &mockHub{nctx: map[string]int{"org/model": 100}}
 
 	// "hello" = 5 chars → 1 estimated token, well below threshold of 90.
@@ -390,7 +390,7 @@ func TestHandleRoute_contextGuard_noHub(t *testing.T) {
 		loaded: map[string]bool{"org/model": true},
 	}
 	// hub is nil — large requests must pass through unchanged.
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	longContent := strings.Repeat("x", 10000)
 	body := `{"model":"org/model","messages":[{"role":"user","content":"` + longContent + `"}]}`
@@ -417,7 +417,7 @@ func TestHandleRoute_upstreamContextLengthExceeded(t *testing.T) {
 		addrs:  map[string]string{"org/model": backend.URL},
 		loaded: map[string]bool{"org/model": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -485,7 +485,7 @@ func TestEstimateTokens(t *testing.T) {
 
 func TestGateway_Models_Empty(t *testing.T) {
 	cfg := &config.Config{Listen: ":0", Models: map[string]config.ModelParams{}}
-	g := newGateway(cfg, &mockManager{}, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	g.handleModels(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -536,7 +536,7 @@ func TestGateway_HandleRoute_Remote(t *testing.T) {
 			return "", func() {}, nil
 		},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -595,7 +595,7 @@ func TestGateway_HandleRoute_Remote_SSE(t *testing.T) {
 		},
 		MaxModels: 1,
 	}
-	g := newGateway(cfg, &mockManager{}, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -628,7 +628,7 @@ func TestGateway_Models_WithRemote(t *testing.T) {
 			{ID: "local-model", Status: "loaded"},
 		},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	g.handleModels(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -711,7 +711,7 @@ func TestGateway_HandleRoute_Remote_WithTracker(t *testing.T) {
 		MaxModels: 1,
 	}
 	tracker := monitor.NewRemoteTracker()
-	g := newGateway(cfg, &mockManager{}, nil, tracker, nil, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, tracker, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -765,7 +765,7 @@ func TestGateway_UpdateConfig(t *testing.T) {
 		addrs:  map[string]string{"org/new-model": backend.URL},
 		loaded: map[string]bool{"org/new-model": true},
 	}
-	g := newGateway(oldCfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(oldCfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	// Before update: old-model matches, new-model does not.
 	w := httptest.NewRecorder()
@@ -834,7 +834,7 @@ func TestGateway_HandleRoute_DiscoveredModel(t *testing.T) {
 	discovery.Start()
 	defer discovery.Stop()
 
-	g := newGateway(cfg, &mockManager{}, nil, nil, discovery, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, nil, discovery, nil, slog.Default())
 
 	// Request for a discovered model should route to the provider.
 	w := httptest.NewRecorder()
@@ -867,7 +867,7 @@ func TestGateway_HandleRoute_QueueFull(t *testing.T) {
 		addrs:  map[string]string{"org/model": "http://localhost:9999"},
 		loaded: map[string]bool{"org/model": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 	// Replace queue with a zero-depth instance so every enqueue fails immediately.
 	g.q = queue.New(0, func(_ context.Context, _ string) (string, func(), error) {
 		return "", nil, nil
@@ -901,7 +901,7 @@ func TestGateway_HandleRoute_ModelDraining(t *testing.T) {
 			return "", func() {}, process.ErrModelDraining
 		},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -957,7 +957,7 @@ func TestGateway_Warmup_Success(t *testing.T) {
 		addrs:  map[string]string{"org/model": backend.URL},
 		loaded: map[string]bool{"org/model": true},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 	g.warmupInterval = time.Millisecond // fast retry for tests
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -971,7 +971,7 @@ func TestGateway_Warmup_AllAttemptsRetried(t *testing.T) {
 	mgr := &mockManager{
 		loaded: map[string]bool{"org/model": false},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 	g.warmupInterval = time.Millisecond // fast retry for tests
 	g.q = queue.New(0, func(_ context.Context, _ string) (string, func(), error) {
 		return "", nil, nil
@@ -985,7 +985,7 @@ func TestGateway_Warmup_AllAttemptsRetried(t *testing.T) {
 func TestGateway_Warmup_ContextCancelled(t *testing.T) {
 	cfg := testConfig("org/model", 1, "")
 	mgr := &mockManager{loaded: map[string]bool{"org/model": false}}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 	g.warmupInterval = 10 * time.Second // long delay to ensure cancel fires first
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1033,7 +1033,7 @@ func TestGateway_Warmup_ConfigOrder(t *testing.T) {
 			return backend.URL, func() {}, nil
 		},
 	}
-	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g := newGateway(cfg, mgr, nil, nil, nil, nil, slog.Default())
 	g.warmupInterval = time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1075,7 +1075,7 @@ func TestGateway_Models_WithDiscovery(t *testing.T) {
 	discovery.Start()
 	defer discovery.Stop()
 
-	g := newGateway(cfg, &mockManager{}, nil, nil, discovery, slog.Default())
+	g := newGateway(cfg, &mockManager{}, nil, nil, discovery, nil, slog.Default())
 
 	w := httptest.NewRecorder()
 	g.handleModels(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))

@@ -48,6 +48,7 @@ func (s modelState) String() string {
 type procState struct {
 	mu        sync.Mutex
 	modelName string
+	modelPath string // resolved GGUF path; empty means use -hf modelName
 	params    config.ModelParams
 	port      int
 	proc      *exec.Cmd
@@ -83,7 +84,7 @@ func (ps *procState) addInflight(port int) (addr string, release func(), err err
 type Manager struct {
 	cfg        *config.Config
 	log        *slog.Logger
-	cmdBuilder func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd
+	cmdBuilder func(ctx context.Context, modelName string, modelPath string, params config.ModelParams) *exec.Cmd
 
 	// healthTimeout overrides the 120s waitHealthy timeout. Zero means 120s.
 	// Set in tests to speed up failure scenarios.
@@ -111,15 +112,15 @@ func New(cfg *config.Config, log *slog.Logger) *Manager {
 	m.log = log
 	m.procs = make(map[string]*procState)
 	m.eventCh = make(chan monitor.ServerEvent, 256)
-	m.cmdBuilder = func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
-		return exec.CommandContext(ctx, "llama-server", buildArgs(modelName, params)...)
+	m.cmdBuilder = func(ctx context.Context, modelName string, modelPath string, params config.ModelParams) *exec.Cmd {
+		return exec.CommandContext(ctx, "llama-server", buildArgs(modelName, modelPath, params)...)
 	}
 	return m
 }
 
 // SetCmdBuilder replaces the default llama-server launcher. Used in tests to
 // inject a fake process builder without starting real llama-server instances.
-func (m *Manager) SetCmdBuilder(fn func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd) {
+func (m *Manager) SetCmdBuilder(fn func(ctx context.Context, modelName string, modelPath string, params config.ModelParams) *exec.Cmd) {
 	m.cmdBuilder = fn
 }
 
@@ -414,9 +415,10 @@ func (m *Manager) Addr(name string) (string, bool) {
 // model is healthy, or is closed on failure. Concurrent calls for the same
 // unloaded model coalesce — one process starts and all waiters get the result.
 //
+// modelPath is the resolved GGUF file path; empty means use -hf modelName.
 // The caller must call ticket.Release() (typically via defer) when the proxied
 // request completes to decrement the in-flight counter.
-func (m *Manager) LoadOrGet(modelName string, params config.ModelParams) *LoadTicket {
+func (m *Manager) LoadOrGet(modelName string, modelPath string, params config.ModelParams) *LoadTicket {
 	ticket := newTicket()
 
 	// Fast path: check under read lock to avoid goroutine overhead for
@@ -457,13 +459,13 @@ func (m *Manager) LoadOrGet(modelName string, params config.ModelParams) *LoadTi
 	if m.vram != nil {
 		estimate = m.vram.EstimateForModel(modelName)
 	}
-	go m.startLoad(ticket, modelName, params, estimate)
+	go m.startLoad(ticket, modelName, modelPath, params, estimate)
 	return ticket
 }
 
 // startLoad is the slow path of LoadOrGet: acquires the write lock, evicts if
 // needed, and either joins an in-progress load or starts a new supervisor.
-func (m *Manager) startLoad(ticket *LoadTicket, modelName string, params config.ModelParams, estimate uint64) {
+func (m *Manager) startLoad(ticket *LoadTicket, modelName string, modelPath string, params config.ModelParams, estimate uint64) {
 	m.mu.Lock()
 
 	// Re-check state under write lock; may have changed since fast-path check.
@@ -535,6 +537,7 @@ func (m *Manager) startLoad(ticket *LoadTicket, modelName string, params config.
 	modelCtx, modelCancel := context.WithCancel(m.ctx)
 	ps := &procState{
 		modelName: modelName,
+		modelPath: modelPath,
 		params:    params,
 		state:     stateLoading,
 		ready:     make(chan struct{}),
@@ -802,9 +805,10 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 		}
 		ps.startedAt = time.Now()
 		params := ps.params
+		modelPath := ps.modelPath
 		ps.mu.Unlock()
 
-		cmd, parser, err := m.launch(ctx, modelName, params)
+		cmd, parser, err := m.launch(ctx, modelName, modelPath, params)
 		if err != nil {
 			m.log.Error("failed to launch llama-server", "model", modelName, "error", err)
 			if !ps.isWarmup {
@@ -972,8 +976,8 @@ func (m *Manager) failLoad(ps *procState, modelName string, err error) {
 // launch starts a llama-server process with --port 0 and wires its
 // stdout/stderr to the event parser. The actual listening port is sent
 // to parser.PortCh once llama-server prints its "listening on" line.
-func (m *Manager) launch(ctx context.Context, modelName string, params config.ModelParams) (*exec.Cmd, *monitor.EventParser, error) {
-	cmd := m.cmdBuilder(ctx, modelName, params)
+func (m *Manager) launch(ctx context.Context, modelName string, modelPath string, params config.ModelParams) (*exec.Cmd, *monitor.EventParser, error) {
+	cmd := m.cmdBuilder(ctx, modelName, modelPath, params)
 
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -1008,17 +1012,17 @@ func setOOMScore(pid int, log *slog.Logger) {
 // buildArgs constructs the llama-server command-line arguments for a model.
 // Port 0 tells llama-server to pick a free port; the actual port is parsed
 // from stdout by the event parser.
-func buildArgs(modelName string, params config.ModelParams) []string {
+// When modelPath is non-empty, -m <path> is used; otherwise -hf <modelName>.
+func buildArgs(modelName string, modelPath string, params config.ModelParams) []string {
 	slots := params.Slots
 	if slots <= 0 {
 		slots = 1
 	}
-	args := []string{
-		"-hf", modelName,
-		"--port", "0",
-		"--no-webui",
-		"--metrics",
-		"--parallel", strconv.Itoa(slots),
+	var args []string
+	if modelPath != "" {
+		args = []string{"-m", modelPath, "--port", "0", "--no-webui", "--metrics", "--parallel", strconv.Itoa(slots)}
+	} else {
+		args = []string{"-hf", modelName, "--port", "0", "--no-webui", "--metrics", "--parallel", strconv.Itoa(slots)}
 	}
 	if params.GPULayers > 0 {
 		args = append(args, "-ngl", strconv.Itoa(params.GPULayers))
@@ -1029,20 +1033,8 @@ func buildArgs(modelName string, params config.ModelParams) []string {
 	if params.Pooling != "" {
 		args = append(args, "--embedding", "--pooling", params.Pooling)
 	}
-	if params.SpecType != "" {
-		args = append(args, "--spec-type", params.SpecType)
-	}
-	if params.DraftMax > 0 {
-		args = append(args, "--draft-max", strconv.Itoa(params.DraftMax))
-	}
-	if params.DraftMin > 0 {
-		args = append(args, "--draft-min", strconv.Itoa(params.DraftMin))
-	}
-	if params.SpecNgramN > 0 {
-		args = append(args, "--spec-ngram-size-n", strconv.Itoa(params.SpecNgramN))
-	}
-	if params.SpecNgramM > 0 {
-		args = append(args, "--spec-ngram-size-m", strconv.Itoa(params.SpecNgramM))
+	if params.KVType != "" {
+		args = append(args, "--cache-type-k", params.KVType, "--cache-type-v", params.KVType)
 	}
 	return append(args, params.Extra...)
 }

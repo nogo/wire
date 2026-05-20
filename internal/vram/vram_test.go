@@ -37,10 +37,8 @@ func (m *mockBackend) TotalVRAM() uint64 { return m.totalVRAM }
 func (m *mockBackend) UsedVRAM() uint64  { return m.usedVRAM.Load() }
 func (m *mockBackend) IsNoop() bool      { return m.isNoop }
 
-func newTestTracker(backend Backend, hfCacheDir string) (*Tracker, *HFCache) {
-	hf := NewHFCache(hfCacheDir)
-	tr := New(backend, hf)
-	return tr, hf
+func newTestTracker(backend Backend, _ string) *Tracker {
+	return New(backend, nil)
 }
 
 func TestNoopBackend(t *testing.T) {
@@ -55,7 +53,7 @@ func TestNoopBackend(t *testing.T) {
 
 func TestTracker_CanFit_NoopBackend(t *testing.T) {
 	backend := NoopBackend{}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 	if !tracker.CanFit(1 << 60) {
 		t.Error("noop backend should always return CanFit=true")
@@ -69,7 +67,7 @@ func TestTracker_CanFit_Budget(t *testing.T) {
 	}
 	backend.usedVRAM.Store(2 << 30)
 
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	// Budget = total - (actual_used + pending) = 8 - (2 + 0) = 6 GiB free
@@ -107,7 +105,7 @@ func TestTracker_Reserve_Release(t *testing.T) {
 		totalVRAM: 4 << 30,
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	if !tracker.Reserve("model-a", 2<<30) {
@@ -123,7 +121,7 @@ func TestTracker_Reconciliation(t *testing.T) {
 		totalVRAM: 8 << 30,
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.Reserve("model-a", 2<<30)
@@ -147,7 +145,7 @@ func TestTracker_GPUStateCh(t *testing.T) {
 		usedVRAM:  atomic.Uint64{},
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 	tracker.Start()
 	defer tracker.Stop()
@@ -201,77 +199,14 @@ func TestPlaceholderVRAM(t *testing.T) {
 	}
 }
 
-func TestHFCache_Scan(t *testing.T) {
-	cacheDir := t.TempDir()
-	modelDir := filepath.Join(cacheDir, "models", "llama3-7b")
-	os.MkdirAll(modelDir, 0o755)
-	ggufPath := filepath.Join(modelDir, "model.gguf")
-	data := make([]byte, 2<<30)
-	os.WriteFile(ggufPath, data, 0o644)
-
-	hf := NewHFCache(cacheDir)
-	results := hf.Scan()
-
-	if len(results) != 1 {
-		t.Fatalf("expected 1 estimate, got %d", len(results))
-	}
-	est, ok := results["llama3-7b"]
-	if !ok {
-		t.Fatal("expected estimate for llama3-7b")
-	}
-	fileSize := int64(2 << 30)
-	want := uint64(float64(fileSize) * vramMultiplier)
-	if est != want {
-		t.Errorf("estimate: got %d, want %d", est, want)
-	}
-
-	if got := hf.Estimate("llama3-7b"); got != want {
-		t.Errorf("Estimate: got %d, want %d", got, want)
-	}
-	if got := hf.Estimate("nonexistent"); got != 0 {
-		t.Errorf("Estimate for nonexistent: got %d, want 0", got)
-	}
-}
-
-func TestHFCache_EmptyDir(t *testing.T) {
-	hf := NewHFCache("/nonexistent/path")
-	results := hf.Scan()
-	if len(results) != 0 {
-		t.Errorf("expected 0 results for missing dir, got %d", len(results))
-	}
-}
-
-func TestResolveModelPath(t *testing.T) {
-	cacheDir := t.TempDir()
-	modelDir := filepath.Join(cacheDir, "models", "deepseek-r1")
-	os.MkdirAll(filepath.Join(modelDir, "blobs"), 0o755)
-	ggufPath := filepath.Join(modelDir, "blobs", "model.gguf")
-	os.WriteFile(ggufPath, []byte("fake"), 0o644)
-
-	got := ResolveModelPath(cacheDir, "deepseek-r1")
-	if got != ggufPath {
-		t.Errorf("ResolveModelPath: got %q, want %q", got, ggufPath)
-	}
-
-	got = ResolveModelPath(cacheDir, "nonexistent")
-	if got != "" {
-		t.Errorf("ResolveModelPath for nonexistent: got %q, want empty", got)
-	}
-}
-
 func TestTracker_EstimateForModel(t *testing.T) {
 	backend := &mockBackend{isNoop: true}
-	tracker, hf := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.SetEstimate("custom-model", 12345)
 	if got := tracker.EstimateForModel("custom-model"); got != 12345 {
 		t.Errorf("EstimateForModel: got %d, want 12345", got)
-	}
-
-	hf.estimates.Store("cached-model", uint64(99999))
-	if got := tracker.EstimateForModel("cached-model"); got != 99999 {
-		t.Errorf("EstimateForModel from HF cache: got %d, want 99999", got)
 	}
 
 	got := tracker.EstimateForModel("llama3:7b")
@@ -280,27 +215,36 @@ func TestTracker_EstimateForModel(t *testing.T) {
 	}
 }
 
-func Test_findGGUF(t *testing.T) {
-	dir := t.TempDir()
-	nested := filepath.Join(dir, "a", "b")
-	os.MkdirAll(nested, 0o755)
-	gguf := filepath.Join(nested, "model.gguf")
-	os.WriteFile(gguf, []byte("x"), 0o644)
+func TestTracker_EstimateForModel_WithResolver(t *testing.T) {
+	tmp := t.TempDir()
+	ggufPath := filepath.Join(tmp, "my-model-Q8_0.gguf")
+	data := make([]byte, 100<<20)
+	os.WriteFile(ggufPath, data, 0o644) //nolint:errcheck
 
-	got := findGGUF(dir)
-	if got != gguf {
-		t.Errorf("findGGUF: got %q, want %q", got, gguf)
-	}
+	resolver := &mockResolver{paths: map[string]string{"my-model-Q8_0": ggufPath}}
+	backend := &mockBackend{isNoop: true}
+	tracker := New(backend, resolver)
+	tracker.Discover()
 
-	empty := t.TempDir()
-	if got := findGGUF(empty); got != "" {
-		t.Errorf("findGGUF on empty dir: got %q, want empty", got)
+	est := tracker.EstimateForModel("my-model-Q8_0")
+	want := uint64(float64(100<<20) * vramMultiplier)
+	if est != want {
+		t.Errorf("EstimateForModel with resolver: got %d, want %d", est, want)
 	}
+}
+
+// mockResolver implements modelResolver for testing.
+type mockResolver struct {
+	paths map[string]string
+}
+
+func (r *mockResolver) FilePath(name string) string {
+	return r.paths[name]
 }
 
 func TestPendingTotal(t *testing.T) {
 	backend := &mockBackend{isNoop: true}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.pending.Store("a", uint64(100))
@@ -314,7 +258,7 @@ func TestPendingTotal(t *testing.T) {
 
 func TestReservedTotal(t *testing.T) {
 	backend := &mockBackend{isNoop: true}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.reservations.Store("a", uint64(100))
@@ -333,7 +277,7 @@ func TestReconcileClearsStaleReservations(t *testing.T) {
 	}
 	backend.usedVRAM.Store(1 << 30)
 
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.reservations.Store("stale-model", uint64(4<<30))
@@ -357,7 +301,7 @@ func TestTracker_CanFit_OverBudget(t *testing.T) {
 	// sysfs reports more used than totalVRAM — must not underflow to maxUint64
 	backend.usedVRAM.Store(10 << 30)
 
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	if tracker.CanFit(1) {
@@ -375,7 +319,7 @@ func TestReconcile_PendingClearedWhenSysfsDropsToReserved(t *testing.T) {
 		totalVRAM: total,
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.Reserve("model-a", 2<<30)
@@ -413,7 +357,7 @@ func TestReconcile_PendingStaysWhenSysfsUnchanged(t *testing.T) {
 		totalVRAM: total,
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.Reserve("model-a", 2<<30)
@@ -440,7 +384,7 @@ func TestReconcile_MultipleStaleReservations(t *testing.T) {
 		totalVRAM: total,
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.Reserve("model-a", 4<<30)
@@ -469,7 +413,7 @@ func TestReconcile_FreeVRAMReflectsPendingThenClears(t *testing.T) {
 		totalVRAM: total,
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.Reserve("model-a", 4<<30)
@@ -501,7 +445,7 @@ func TestReconcile_AdmissionUnblockedAfterPendingClears(t *testing.T) {
 		totalVRAM: total,
 		gpus:      []monitor.GPUInfo{{Index: 0, Name: "Mock"}},
 	}
-	tracker, _ := newTestTracker(backend, "")
+	tracker := newTestTracker(backend, "")
 	tracker.Discover()
 
 	tracker.Reserve("model-a", 3<<30)

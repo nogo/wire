@@ -62,6 +62,7 @@ type Config struct {
 	Monitor      bool                   `yaml:"monitor"`
 	MaxModels    int                    `yaml:"max_models"`
 	HFCacheDir   string                 `yaml:"hf_cache_dir"`
+	ModelDirs    []string               `yaml:"model_dirs"`
 	DrainTimeout Duration               `yaml:"drain_timeout"`
 	QueueDepth   int                    `yaml:"queue_depth"`
 	Providers    map[string]Provider    `yaml:"providers"`
@@ -70,16 +71,12 @@ type Config struct {
 }
 
 type ModelParams struct {
-	Context    int      `yaml:"context"`
-	GPULayers  int      `yaml:"gpu_layers"`
-	Slots      int      `yaml:"slots"`
-	Pooling    string   `yaml:"pooling"`
-	Extra      []string `yaml:"extra"`
-	SpecType   string   `yaml:"spec_type"`
-	DraftMax   int      `yaml:"draft_max"`
-	DraftMin   int      `yaml:"draft_min"`
-	SpecNgramN int      `yaml:"spec_ngram_n"`
-	SpecNgramM int      `yaml:"spec_ngram_m"`
+	Context   int      `yaml:"context"`
+	GPULayers int      `yaml:"gpu_layers"`
+	Slots     int      `yaml:"slots"`
+	Pooling   string   `yaml:"pooling"`
+	KVType    string   `yaml:"kv_type"`
+	Extra     []string `yaml:"extra"`
 
 	// Remote provider fields. When Provider is set, this model proxies to a
 	// remote API instead of a local llama-server process.
@@ -98,11 +95,7 @@ func (p ModelParams) Equal(other ModelParams) bool {
 		p.GPULayers != other.GPULayers ||
 		p.Slots != other.Slots ||
 		p.Pooling != other.Pooling ||
-		p.SpecType != other.SpecType ||
-		p.DraftMax != other.DraftMax ||
-		p.DraftMin != other.DraftMin ||
-		p.SpecNgramN != other.SpecNgramN ||
-		p.SpecNgramM != other.SpecNgramM ||
+		p.KVType != other.KVType ||
 		p.Provider != other.Provider ||
 		p.UpstreamModel != other.UpstreamModel ||
 		len(p.Extra) != len(other.Extra) ||
@@ -204,6 +197,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.QueueDepth == 0 {
 		cfg.QueueDepth = 200
 	}
+	// Expand ~ in model_dirs entries.
+	if len(cfg.ModelDirs) > 0 {
+		home, _ := os.UserHomeDir()
+		for i, dir := range cfg.ModelDirs {
+			if strings.HasPrefix(dir, "~/") && home != "" {
+				cfg.ModelDirs[i] = filepath.Join(home, dir[2:])
+			}
+		}
+	}
 	for pattern, p := range cfg.Models {
 		if p.Slots == 0 && !p.IsRemote() {
 			p.Slots = 1
@@ -259,16 +261,23 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("warmup list length %d exceeds max_models %d", len(cfg.Warmup), cfg.MaxModels)
 	}
 
-	validSpecTypes := map[string]bool{
-		"ngram-simple":  true,
-		"ngram-mod":     true,
-		"ngram-cache":   true,
-		"ngram-map-k":   true,
-		"ngram-map-k4v": true,
+	// Warn for unreadable model_dirs entries.
+	for _, dir := range cfg.ModelDirs {
+		if _, err := os.ReadDir(dir); err != nil {
+			slog.Warn("model_dirs: directory not readable", "dir", dir, "error", err)
+		}
+	}
+
+	validKVTypes := map[string]bool{
+		"f16":  true,
+		"q8_0": true,
+		"q4_0": true,
+		"q5_0": true,
+		"q5_1": true,
 	}
 	for pattern, p := range cfg.Models {
-		if p.SpecType != "" && !validSpecTypes[p.SpecType] {
-			return fmt.Errorf("model pattern %q: invalid spec_type %q (valid: ngram-simple, ngram-mod, ngram-cache, ngram-map-k, ngram-map-k4v)", pattern, p.SpecType)
+		if p.KVType != "" && !validKVTypes[p.KVType] {
+			return fmt.Errorf("model pattern %q: invalid kv_type %q (valid: f16, q8_0, q4_0, q5_0, q5_1)", pattern, p.KVType)
 		}
 
 		// Remote model validation.
@@ -276,8 +285,8 @@ func validate(cfg *Config) error {
 			if _, ok := cfg.Providers[p.Provider]; !ok {
 				return fmt.Errorf("model pattern %q: references unknown provider %q", pattern, p.Provider)
 			}
-			if p.Context != 0 || p.GPULayers != 0 || p.Slots != 0 || p.Pooling != "" || len(p.Extra) != 0 || p.SpecType != "" {
-				return fmt.Errorf("model pattern %q: remote models cannot set local-only fields (context, gpu_layers, slots, pooling, extra, spec_type)", pattern)
+			if p.Context != 0 || p.GPULayers != 0 || p.Slots != 0 || p.Pooling != "" || len(p.Extra) != 0 || p.KVType != "" {
+				return fmt.Errorf("model pattern %q: remote models cannot set local-only fields (context, gpu_layers, slots, pooling, extra, kv_type)", pattern)
 			}
 		}
 	}

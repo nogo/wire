@@ -11,6 +11,7 @@ import (
 	"github.com/nogo/wire/internal"
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/gateway"
+	"github.com/nogo/wire/internal/modelindex"
 	"github.com/nogo/wire/internal/monitor"
 	"github.com/nogo/wire/internal/process"
 	"github.com/nogo/wire/internal/vram"
@@ -70,11 +71,12 @@ func runUp() error {
 	shutCtx, stop := signal.NotifyContext(bgCtx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// 2. VRAM tracker init (GPU auto-detect, HF cache scan).
+	// 2. Model index and VRAM tracker init.
 	backend := detectGPUBackend(cfg)
-	tracker := vram.New(backend, vram.NewHFCache(cfg.HFCacheDir))
+	idx := modelindex.New(cfg.ModelDirs, cfg.HFCacheDir)
+	idx.Scan()
+	tracker := vram.New(backend, idx)
 	gpus := tracker.Discover()
-	tracker.HFCache().Scan()
 	tracker.Start()
 	defer tracker.Stop()
 
@@ -120,7 +122,7 @@ func runUp() error {
 	}
 
 	// 5. Gateway init (uses VRAM tracker + queue).
-	gw := gateway.New(cfg, mgr, hub, remote, discovery, slog.Default())
+	gw := gateway.New(cfg, mgr, hub, remote, discovery, idx, slog.Default())
 
 	if hub != nil {
 		hub.SetModelProvider(func() []monitor.ModelInfo {

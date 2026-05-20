@@ -108,10 +108,10 @@ func TestHelperProcess(t *testing.T) {
 
 // testCmdBuilder returns a cmdBuilder that runs the test binary as a fake
 // llama-server subprocess.
-func testCmdBuilder(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
+func testCmdBuilder(ctx context.Context, modelName string, modelPath string, params config.ModelParams) *exec.Cmd {
 	args := append(
 		[]string{"-test.run=TestHelperProcess", "--", "llama-server"},
-		buildArgs(modelName, params)...,
+		buildArgs(modelName, modelPath, params)...,
 	)
 	cmd := exec.CommandContext(ctx, os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
@@ -121,11 +121,11 @@ func testCmdBuilder(ctx context.Context, modelName string, params config.ModelPa
 // testCmdBuilderWithDelay is like testCmdBuilder but the health endpoint
 // sleeps for delayMs milliseconds before responding 200. Used to exercise
 // the "concurrent requests coalesce" and "context cancellation" scenarios.
-func testCmdBuilderWithDelay(delayMs int) func(context.Context, string, config.ModelParams) *exec.Cmd {
-	return func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
+func testCmdBuilderWithDelay(delayMs int) func(context.Context, string, string, config.ModelParams) *exec.Cmd {
+	return func(ctx context.Context, modelName string, modelPath string, params config.ModelParams) *exec.Cmd {
 		args := append(
 			[]string{"-test.run=TestHelperProcess", "--", "llama-server"},
-			buildArgs(modelName, params)...,
+			buildArgs(modelName, modelPath, params)...,
 		)
 		args = append(args, fmt.Sprintf("--health-delay-ms=%d", delayMs))
 		cmd := exec.CommandContext(ctx, os.Args[0], args...)
@@ -136,10 +136,10 @@ func testCmdBuilderWithDelay(delayMs int) func(context.Context, string, config.M
 
 // failCmdBuilder returns a cmdBuilder whose process always exits immediately
 // without starting an HTTP server — simulating a model that fails to load.
-func failCmdBuilder(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd {
+func failCmdBuilder(ctx context.Context, modelName string, modelPath string, params config.ModelParams) *exec.Cmd {
 	args := append(
 		[]string{"-test.run=TestHelperProcess", "--", "llama-server"},
-		buildArgs(modelName, params)...,
+		buildArgs(modelName, modelPath, params)...,
 	)
 	args = append(args, "--fail")
 	cmd := exec.CommandContext(ctx, os.Args[0], args...)
@@ -157,7 +157,7 @@ func newTestManager(cfg *config.Config) *Manager {
 // loadOrGetWait is a test helper that calls LoadOrGet and blocks until the
 // ticket resolves or ctx is cancelled, mimicking the old synchronous signature.
 func loadOrGetWait(ctx context.Context, m *Manager, modelName string, params config.ModelParams) (addr string, release func(), err error) {
-	ticket := m.LoadOrGet(modelName, params)
+	ticket := m.LoadOrGet(modelName, "", params)
 	select {
 	case a, ok := <-ticket.Ready():
 		if !ok {
@@ -187,7 +187,7 @@ func (b *mockVRAMBackend) IsNoop() bool                      { return false }
 
 func TestBuildArgs_minimal(t *testing.T) {
 	params := config.ModelParams{}
-	got := buildArgs("org/model", params)
+	got := buildArgs("org/model", "", params)
 	want := []string{"-hf", "org/model", "--port", "0", "--no-webui", "--metrics", "--parallel", "1"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("buildArgs minimal: got %v, want %v", got, want)
@@ -202,7 +202,7 @@ func TestBuildArgs_full(t *testing.T) {
 		Pooling:   "mean",
 		Extra:     []string{"--flash-attn"},
 	}
-	got := buildArgs("org/model", params)
+	got := buildArgs("org/model", "", params)
 	want := []string{
 		"-hf", "org/model",
 		"--port", "0",
@@ -219,64 +219,59 @@ func TestBuildArgs_full(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_speculative(t *testing.T) {
-	params := config.ModelParams{
-		SpecType:   "ngram-mod",
-		DraftMax:   16,
-		DraftMin:   2,
-		SpecNgramN: 4,
-		SpecNgramM: 3,
-	}
-	got := buildArgs("org/model", params)
-	want := []string{
-		"-hf", "org/model",
-		"--port", "0",
-		"--no-webui",
-		"--metrics",
-		"--parallel", "1",
-		"--spec-type", "ngram-mod",
-		"--draft-max", "16",
-		"--draft-min", "2",
-		"--spec-ngram-size-n", "4",
-		"--spec-ngram-size-m", "3",
-	}
+func TestBuildArgs_localPath(t *testing.T) {
+	params := config.ModelParams{}
+	got := buildArgs("org/model", "/models/my-model-Q8_0.gguf", params)
+	want := []string{"-m", "/models/my-model-Q8_0.gguf", "--port", "0", "--no-webui", "--metrics", "--parallel", "1"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("buildArgs speculative: got %v, want %v", got, want)
+		t.Errorf("buildArgs localPath: got %v, want %v", got, want)
 	}
 }
 
-func TestBuildArgs_speculative_empty(t *testing.T) {
+func TestBuildArgs_hfName(t *testing.T) {
 	params := config.ModelParams{}
-	args := buildArgs("org/model", params)
-	specFlags := []string{"--spec-type", "--draft-max", "--draft-min", "--spec-ngram-size-n", "--spec-ngram-size-m"}
-	for _, f := range specFlags {
-		for _, a := range args {
-			if a == f {
-				t.Errorf("unexpected spec flag %q in args: %v", f, args)
-			}
+	got := buildArgs("org/model", "", params)
+	if len(got) < 2 || got[0] != "-hf" || got[1] != "org/model" {
+		t.Errorf("buildArgs hfName: args should start with -hf org/model, got %v", got)
+	}
+}
+
+func TestBuildArgs_kvType(t *testing.T) {
+	params := config.ModelParams{KVType: "q8_0"}
+	got := buildArgs("org/model", "", params)
+	found := false
+	for i, a := range got {
+		if a == "--cache-type-k" && i+1 < len(got) && got[i+1] == "q8_0" {
+			found = true
 		}
 	}
+	if !found {
+		t.Errorf("buildArgs kvType: --cache-type-k q8_0 not found in %v", got)
+	}
+	foundV := false
+	for i, a := range got {
+		if a == "--cache-type-v" && i+1 < len(got) && got[i+1] == "q8_0" {
+			foundV = true
+		}
+	}
+	if !foundV {
+		t.Errorf("buildArgs kvType: --cache-type-v q8_0 not found in %v", got)
+	}
 }
 
-func TestBuildArgs_speculative_partial(t *testing.T) {
-	params := config.ModelParams{SpecType: "ngram-mod"}
-	got := buildArgs("org/model", params)
-	want := []string{
-		"-hf", "org/model",
-		"--port", "0",
-		"--no-webui",
-		"--metrics",
-		"--parallel", "1",
-		"--spec-type", "ngram-mod",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("buildArgs speculative partial: got %v, want %v", got, want)
+func TestBuildArgs_kvTypeEmpty(t *testing.T) {
+	params := config.ModelParams{}
+	args := buildArgs("org/model", "", params)
+	for _, a := range args {
+		if a == "--cache-type-k" || a == "--cache-type-v" {
+			t.Errorf("unexpected flag %q in args: %v", a, args)
+		}
 	}
 }
 
 func TestBuildArgs_zeroGPULayersOmitted(t *testing.T) {
 	params := config.ModelParams{GPULayers: 0, Context: 0}
-	args := buildArgs("org/model", params)
+	args := buildArgs("org/model", "", params)
 	for _, a := range args {
 		if a == "-ngl" || a == "-c" {
 			t.Errorf("unexpected flag %q in args: %v", a, args)
@@ -310,7 +305,7 @@ func TestLaunch_OOMScoreAdj(t *testing.T) {
 	m := New(&config.Config{}, slog.Default())
 	m.SetCmdBuilder(testCmdBuilder)
 
-	cmd, _, err := m.launch(ctx, "org/test-model", config.ModelParams{})
+	cmd, _, err := m.launch(ctx, "org/test-model", "", config.ModelParams{})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -843,7 +838,7 @@ func TestLoadOrGet_TicketAsync(t *testing.T) {
 	}
 
 	start := time.Now()
-	ticket := m.LoadOrGet("org/model-a", config.ModelParams{Slots: 1})
+	ticket := m.LoadOrGet("org/model-a", "", config.ModelParams{Slots: 1})
 	elapsed := time.Since(start)
 	if elapsed > 50*time.Millisecond {
 		t.Errorf("LoadOrGet took %v; expected near-immediate return", elapsed)
@@ -917,7 +912,7 @@ func TestLoadOrGet_Drain(t *testing.T) {
 	m.procs["org/draining"] = synth
 	m.mu.Unlock()
 
-	tick := m.LoadOrGet("org/draining", config.ModelParams{})
+	tick := m.LoadOrGet("org/draining", "", config.ModelParams{})
 	select {
 	case _, ok := <-tick.Ready():
 		if ok {
@@ -991,7 +986,7 @@ func TestLoadOrGet_CascadingVRAMEviction(t *testing.T) {
 	// Now attach a VRAM tracker. The mock backend reports 6 GiB used, leaving
 	// only 2 GiB free — insufficient for model-c (3 GiB estimate).
 	backend := &mockVRAMBackend{total: totalVRAM, used: mockUsed}
-	tracker := vram.New(backend, nil)
+	tracker := vram.New(backend, nil) //nolint:staticcheck
 	tracker.Discover()
 	tracker.SetEstimate("org/model-a", modelEst)
 	tracker.SetEstimate("org/model-b", modelEst)

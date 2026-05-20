@@ -2,9 +2,7 @@ package vram
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -56,29 +54,4 @@ var knownModelSizes = map[string]uint64{
 	"32b":  20 << 30, // ~20 GiB
 	"70b":  40 << 30, // ~40 GiB
 	"72b":  42 << 30, // ~42 GiB
-}
-
-// ResolveModelPath converts a HuggingFace model reference (e.g., "llama3:8b")
-// to a local GGUF file path under the HF cache directory.
-// Returns empty string if no matching blob is found.
-func ResolveModelPath(hfCacheDir, modelRef string) string {
-	// Strip tag suffix for directory lookup: "llama3:8b" → "llama3"
-	dirName := modelRef
-	if i := strings.Index(modelRef, ":"); i >= 0 {
-		dirName = modelRef[:i]
-	}
-	modelDir := filepath.Join(hfCacheDir, "models", dirName)
-
-	var ggufPath string
-	filepath.WalkDir(modelDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() && strings.HasSuffix(path, ".gguf") {
-			ggufPath = path
-			return fs.SkipAll
-		}
-		return nil
-	})
-	return ggufPath
 }
