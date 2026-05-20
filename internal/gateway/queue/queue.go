@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nogo/wire/internal/process"
 )
 
 // Priority determines the time budget for a queued request.
@@ -34,93 +36,14 @@ var (
 // The release function must be called when the proxied request completes.
 type LoadFunc func(ctx context.Context, model string) (addr string, release func(), err error)
 
-// Ticket represents a queued request. Returned immediately by Enqueue.
-type Ticket struct {
-	ready chan string
-	mu    sync.Mutex
-	err   error
-	rel   func()
-	once  sync.Once
-}
-
-// Ready returns a channel that receives the backend address on success,
-// or is closed without a value on failure. Call Err() to inspect the cause.
-func (t *Ticket) Ready() <-chan string {
-	return t.ready
-}
-
-// Err returns the failure cause. Must be called after Ready() closes or is drained.
-func (t *Ticket) Err() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.err
-}
-
-// Release decrements the in-flight counter. Must be called exactly once after the request completes.
-func (t *Ticket) Release() {
-	t.once.Do(func() {
-		t.mu.Lock()
-		rel := t.rel
-		t.mu.Unlock()
-		if rel != nil {
-			rel()
-		}
-	})
-}
-
-func (t *Ticket) succeed(addr string, rel func()) {
-	t.mu.Lock()
-	t.rel = rel
-	t.mu.Unlock()
-	t.ready <- addr
-}
-
-func (t *Ticket) fail(err error) {
-	t.mu.Lock()
-	t.err = err
-	t.mu.Unlock()
-	close(t.ready)
-}
-
-// modelQueue serializes initial loading for a single model.
-// Concurrent callers coalesce: the first (primary) calls the loader; subsequent callers
-// wait for the primary to finish, then call the loader themselves (which returns immediately
-// since the model is already loaded at that point).
+// modelQueue carries the eviction context for a single model.
 type modelQueue struct {
-	mu          sync.Mutex
-	loading     bool
-	loadDone    chan struct{}
 	evictCtx    context.Context
 	evictCancel context.CancelFunc
 }
 
 func (mq *modelQueue) load(ctx context.Context, loader LoadFunc, model string) (string, func(), error) {
-	mq.mu.Lock()
-	if mq.loading {
-		done := mq.loadDone
-		mq.mu.Unlock()
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return "", nil, ctx.Err()
-		}
-		// Primary finished. Model is now loaded; this call returns immediately.
-		return loader(ctx, model)
-	}
-	// This goroutine is the primary loader.
-	mq.loading = true
-	done := make(chan struct{})
-	mq.loadDone = done
-	mq.mu.Unlock()
-
-	addr, rel, err := loader(ctx, model)
-
-	mq.mu.Lock()
-	mq.loading = false
-	mq.mu.Unlock()
-	close(done)
-
-	return addr, rel, err
+	return loader(ctx, model)
 }
 
 // Queue manages per-model request queuing with time-bounded priority budgets.
@@ -144,13 +67,11 @@ func New(maxDepth int, loader LoadFunc) *Queue {
 }
 
 // Enqueue registers a request for the given model at the specified priority.
-// Returns a Ticket immediately; the caller waits on ticket.Ready() for the backend address.
-func (q *Queue) Enqueue(model string, prio Priority, reqCtx context.Context) *Ticket {
+// Returns a ticket immediately; the caller waits on ticket.Ready() for the backend address.
+func (q *Queue) Enqueue(model string, prio Priority, reqCtx context.Context) *process.LoadTicket {
 	if q.depth.Add(1) > q.maxDepth {
 		q.depth.Add(-1)
-		t := &Ticket{ready: make(chan string, 1)}
-		t.fail(ErrQueueFull)
-		return t
+		return process.NewFailedTicket(ErrQueueFull)
 	}
 
 	q.mu.Lock()
@@ -165,7 +86,7 @@ func (q *Queue) Enqueue(model string, prio Priority, reqCtx context.Context) *Ti
 	}
 	q.mu.Unlock()
 
-	t := &Ticket{ready: make(chan string, 1)}
+	t := process.NewTicket()
 
 	go func() {
 		defer q.depth.Add(-1)
@@ -187,9 +108,9 @@ func (q *Queue) Enqueue(model string, prio Priority, reqCtx context.Context) *Ti
 		if err != nil {
 			select {
 			case <-mq.evictCtx.Done():
-				t.fail(ErrModelEvicted)
+				t.Fail(ErrModelEvicted)
 			default:
-				t.fail(err)
+				t.Fail(err)
 			}
 			return
 		}
@@ -200,12 +121,12 @@ func (q *Queue) Enqueue(model string, prio Priority, reqCtx context.Context) *Ti
 			if rel != nil {
 				rel()
 			}
-			t.fail(ErrModelEvicted)
+			t.Fail(ErrModelEvicted)
 			return
 		default:
 		}
 
-		t.succeed(addr, rel)
+		t.Succeed(addr, rel)
 	}()
 
 	return t

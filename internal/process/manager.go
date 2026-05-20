@@ -434,21 +434,21 @@ func (m *Manager) LoadOrGet(modelName string, params config.ModelParams) *LoadTi
 		switch state {
 		case stateLoaded:
 			addr, rel, _ := ps.addInflight(port)
-			ticket.succeed(addr, rel)
+			ticket.Succeed(addr, rel)
 			return ticket
 		case stateLoading:
 			go func() {
 				<-ready
 				addr, rel, err := m.checkLoaded(modelName)
 				if err != nil {
-					ticket.fail(err)
+					ticket.Fail(err)
 				} else {
-					ticket.succeed(addr, rel)
+					ticket.Succeed(addr, rel)
 				}
 			}()
 			return ticket
 		case stateUnloading:
-			ticket.fail(fmt.Errorf("%w: model %q", ErrModelDraining, modelName))
+			ticket.Fail(fmt.Errorf("%w: model %q", ErrModelDraining, modelName))
 			return ticket
 		}
 	}
@@ -478,21 +478,21 @@ func (m *Manager) startLoad(ticket *LoadTicket, modelName string, params config.
 		case stateLoaded:
 			m.mu.Unlock()
 			addr, rel, _ := ps.addInflight(port)
-			ticket.succeed(addr, rel)
+			ticket.Succeed(addr, rel)
 			return
 		case stateLoading:
 			m.mu.Unlock()
 			<-ready
 			addr, rel, err := m.checkLoaded(modelName)
 			if err != nil {
-				ticket.fail(err)
+				ticket.Fail(err)
 			} else {
-				ticket.succeed(addr, rel)
+				ticket.Succeed(addr, rel)
 			}
 			return
 		case stateUnloading:
 			m.mu.Unlock()
-			ticket.fail(fmt.Errorf("%w: model %q", ErrModelDraining, modelName))
+			ticket.Fail(fmt.Errorf("%w: model %q", ErrModelDraining, modelName))
 			return
 		case stateIdle:
 			delete(m.procs, modelName)
@@ -501,7 +501,7 @@ func (m *Manager) startLoad(ticket *LoadTicket, modelName string, params config.
 
 	if err := m.evictIfNeeded(modelName, estimate); err != nil {
 		m.mu.Unlock()
-		ticket.fail(err)
+		ticket.Fail(err)
 		return
 	}
 
@@ -516,16 +516,16 @@ func (m *Manager) startLoad(ticket *LoadTicket, modelName string, params config.
 		case stateLoaded:
 			m.mu.Unlock()
 			addr, rel, _ := ps2.addInflight(port2)
-			ticket.succeed(addr, rel)
+			ticket.Succeed(addr, rel)
 			return
 		case stateLoading:
 			m.mu.Unlock()
 			<-ready2
 			addr, rel, err := m.checkLoaded(modelName)
 			if err != nil {
-				ticket.fail(err)
+				ticket.Fail(err)
 			} else {
-				ticket.succeed(addr, rel)
+				ticket.Succeed(addr, rel)
 			}
 			return
 		}
@@ -559,9 +559,9 @@ func (m *Manager) startLoad(ticket *LoadTicket, modelName string, params config.
 	<-ready
 	addr, rel, err := m.checkLoaded(modelName)
 	if err != nil {
-		ticket.fail(err)
+		ticket.Fail(err)
 	} else {
-		ticket.succeed(addr, rel)
+		ticket.Succeed(addr, rel)
 	}
 }
 

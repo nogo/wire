@@ -44,14 +44,16 @@ func (t *LoadTicket) Release() {
 	})
 }
 
-func (t *LoadTicket) succeed(addr string, rel func()) {
+// Succeed resolves the ticket with the given backend address and release function.
+func (t *LoadTicket) Succeed(addr string, rel func()) {
 	t.mu.Lock()
 	t.rel = rel
 	t.mu.Unlock()
 	t.ready <- addr
 }
 
-func (t *LoadTicket) fail(err error) {
+// Fail resolves the ticket with an error.
+func (t *LoadTicket) Fail(err error) {
 	t.mu.Lock()
 	t.err = err
 	t.mu.Unlock()
@@ -62,11 +64,16 @@ func newTicket() *LoadTicket {
 	return &LoadTicket{ready: make(chan string, 1)}
 }
 
+// NewTicket returns an unresolved ticket. Call Succeed or Fail to resolve it.
+func NewTicket() *LoadTicket {
+	return newTicket()
+}
+
 // NewFailedTicket returns a ticket that is already resolved with the given error.
 // Used by test doubles implementing processManager.
 func NewFailedTicket(err error) *LoadTicket {
 	t := newTicket()
-	t.fail(err)
+	t.Fail(err)
 	return t
 }
 
@@ -74,6 +81,6 @@ func NewFailedTicket(err error) *LoadTicket {
 // and release function. Used by test doubles implementing processManager.
 func NewReadyTicket(addr string, rel func()) *LoadTicket {
 	t := newTicket()
-	t.succeed(addr, rel)
+	t.Succeed(addr, rel)
 	return t
 }

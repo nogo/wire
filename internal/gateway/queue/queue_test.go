@@ -3,10 +3,11 @@ package queue
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nogo/wire/internal/process"
 )
 
 // testBudgets replaces the production time budgets with fast values suitable for unit tests.
@@ -27,7 +28,7 @@ func immediateLoader(_ context.Context, _ string) (string, func(), error) {
 }
 
 // awaitTicket waits for the ticket's Ready channel and returns success/failure.
-func awaitTicket(t *testing.T, ticket *Ticket, timeout time.Duration) (addr string, ok bool) {
+func awaitTicket(t *testing.T, ticket *process.LoadTicket, timeout time.Duration) (addr string, ok bool) {
 	t.Helper()
 	select {
 	case addr, ok = <-ticket.Ready():
@@ -125,57 +126,6 @@ func TestPriorityBudgets(t *testing.T) {
 	}
 }
 
-// ---- Coalesced loading ----
-
-func TestCoalescing(t *testing.T) {
-	var (
-		once      sync.Once
-		slowCalls atomic.Int32
-		allCalls  atomic.Int32
-	)
-
-	loader := func(ctx context.Context, _ string) (string, func(), error) {
-		allCalls.Add(1)
-		var loadErr error
-		once.Do(func() {
-			slowCalls.Add(1)
-			select {
-			case <-time.After(100 * time.Millisecond):
-			case <-ctx.Done():
-				loadErr = ctx.Err()
-			}
-		})
-		if loadErr != nil {
-			return "", nil, loadErr
-		}
-		return "http://localhost:8080", func() {}, nil
-	}
-
-	q := newTestQueue(200, loader)
-
-	const n = 5
-	tickets := make([]*Ticket, n)
-	for i := range tickets {
-		tickets[i] = q.Enqueue("model-a", PriorityHigh, context.Background())
-	}
-
-	for i, tk := range tickets {
-		addr, ok := awaitTicket(t, tk, time.Second)
-		if !ok {
-			t.Errorf("ticket[%d] failed: %v", i, tk.Err())
-		} else if addr == "" {
-			t.Errorf("ticket[%d]: expected non-empty addr", i)
-		}
-	}
-
-	if slowCalls.Load() != 1 {
-		t.Errorf("expected exactly 1 slow load, got %d", slowCalls.Load())
-	}
-	if allCalls.Load() != n {
-		t.Errorf("expected %d total loader calls, got %d", n, allCalls.Load())
-	}
-}
-
 // ---- Model eviction ----
 
 func TestEviction(t *testing.T) {
@@ -200,7 +150,7 @@ func TestEviction(t *testing.T) {
 	// Evict model while tickets are queued.
 	q.CancelModel("model-b")
 
-	for i, tk := range []*Ticket{t1, t2} {
+	for i, tk := range []*process.LoadTicket{t1, t2} {
 		select {
 		case _, ok := <-tk.Ready():
 			if ok {

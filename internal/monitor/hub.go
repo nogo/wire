@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -263,7 +264,7 @@ func (h *Hub) poll() {
 
 func (h *Hub) fetchBackend(b BackendStatus) *BackendMetrics {
 	m := &BackendMetrics{Name: b.Name}
-	base := "http://localhost:" + itoa(b.Port)
+	base := "http://localhost:" + strconv.Itoa(b.Port)
 
 	if data, err := h.fetch(base + "/metrics"); err == nil {
 		g := ParsePrometheusGauges(string(data))
@@ -350,25 +351,4 @@ func (h *Hub) NCtx(model string) int {
 		return 0
 	}
 	return m.Slots[0].NCtx
-}
-
-// itoa converts an int to its decimal string representation without importing
-// the strconv package at the call site.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	buf := make([]byte, 0, 10)
-	for n > 0 {
-		buf = append([]byte{byte('0' + n%10)}, buf...)
-		n /= 10
-	}
-	if neg {
-		buf = append([]byte{'-'}, buf...)
-	}
-	return string(buf)
 }
