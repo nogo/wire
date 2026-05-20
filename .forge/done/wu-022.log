@@ -1,0 +1,13 @@
+WU-022 is complete. Here's what was built:
+
+**Files changed:**
+- `internal/process/ticket.go` (new) — `LoadTicket` type with `Ready()`, `Err()`, `Release()`, plus `NewFailedTicket`/`NewReadyTicket` for test doubles
+- `internal/vram/vram.go` — added `FreeVRAM() uint64` method
+- `internal/process/manager.go` — async `LoadOrGet` returning `*LoadTicket`; `startLoad` goroutine; `drainAndCancel` with configurable timeout (default 30s); cascading `evictIfNeeded` that selects minimum LRU idle models to satisfy both count and VRAM constraints; `SetVRAMTracker`; `vram.Reserve` after healthy load
+- `internal/gateway/gateway.go` — updated `processManager` interface and `handleRoute` to use ticket API with `select` on `Ready()` / `ctx.Done()`
+- `internal/process/manager_test.go` — added `loadOrGetWait` helper, `mockVRAMBackend`; updated all existing call sites; added `TestLoadOrGet_TicketAsync`, `TestLoadOrGet_Drain`, `TestLoadOrGet_CascadingVRAMEviction`
+
+**Key design notes:**
+- Fast path (model already loaded) signals the ticket synchronously without a goroutine
+- Drain = mark as `stateUnloading` (new requests rejected immediately), wait up to `drainTimeout` for inflight → 0, then `SIGTERM` + 10s `WaitDelay` 
+- VRAM eviction selects minimum LRU models by accumulating estimates until `free + freed ≥ estimate`

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/nogo/wire/internal/config"
 	"github.com/nogo/wire/internal/monitor"
+	"github.com/nogo/wire/internal/vram"
 )
 
 // modelState represents the lifecycle state of a managed model process.
@@ -87,6 +89,13 @@ type Manager struct {
 	// Set in tests to speed up failure scenarios.
 	healthTimeout time.Duration
 
+	// vram is the optional VRAM tracker for admission control. nil = count-only.
+	vram *vram.Tracker
+
+	// drainTimeout is the max time to wait for in-flight requests to complete
+	// before sending SIGTERM. Zero means 30s.
+	drainTimeout time.Duration
+
 	mu      sync.RWMutex
 	procs   map[string]*procState
 	ctx     context.Context    // manager root context (detached from any HTTP request)
@@ -112,6 +121,37 @@ func New(cfg *config.Config, log *slog.Logger) *Manager {
 // inject a fake process builder without starting real llama-server instances.
 func (m *Manager) SetCmdBuilder(fn func(ctx context.Context, modelName string, params config.ModelParams) *exec.Cmd) {
 	m.cmdBuilder = fn
+}
+
+// SetVRAMTracker attaches a VRAM tracker for VRAM-aware admission control.
+// When nil (default), only the max_models count limit is enforced.
+func (m *Manager) SetVRAMTracker(t *vram.Tracker) { m.vram = t }
+
+// effectiveDrainTimeout returns the configured drain timeout or the default 30s.
+func (m *Manager) effectiveDrainTimeout() time.Duration {
+	if m.drainTimeout > 0 {
+		return m.drainTimeout
+	}
+	return 30 * time.Second
+}
+
+// drainAndCancel waits up to drainTimeout for in-flight requests to complete,
+// then cancels the model's context to initiate SIGTERM. Must NOT hold m.mu.
+func (m *Manager) drainAndCancel(ps *procState) {
+	deadline := time.Now().Add(m.effectiveDrainTimeout())
+	for ps.inflight.Load() > 0 {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			m.log.Warn("drain timeout exceeded, forcing shutdown", "model", ps.modelName)
+			break
+		}
+		sleep := 10 * time.Millisecond
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+	ps.cancel()
 }
 
 // Events returns a receive-only channel of structured events from all managed processes.
@@ -180,24 +220,12 @@ func (m *Manager) ListModels() []monitor.ModelInfo {
 	return result
 }
 
-// Start launches supervisor goroutines for all warmup models.
-// It returns immediately; health checks happen asynchronously.
+// Start initialises the manager's root context. Warmup models are loaded
+// through the gateway's admission path (Gateway.Warmup), not here.
 func (m *Manager) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	m.ctx = ctx
 	m.cancel = cancel
-
-	for _, modelName := range m.cfg.Warmup {
-		params, ok := m.cfg.MatchModel(modelName)
-		if !ok {
-			cancel()
-			return fmt.Errorf("warmup model %q does not match any pattern", modelName)
-		}
-		if err := m.startSupervisor(modelName, params, true); err != nil {
-			cancel()
-			return err
-		}
-	}
 	return nil
 }
 
@@ -381,22 +409,64 @@ func (m *Manager) Addr(name string) (string, bool) {
 	return fmt.Sprintf("http://localhost:%d", ps.port), true
 }
 
-// LoadOrGet returns the address of the named model, loading it on demand if
-// necessary. Concurrent calls for the same unloaded model coalesce — one
-// process starts and all waiters get the address when it becomes healthy.
+// LoadOrGet returns a LoadTicket for the named model, loading it on demand if
+// necessary. The ticket's Ready() channel receives the backend address when the
+// model is healthy, or is closed on failure. Concurrent calls for the same
+// unloaded model coalesce — one process starts and all waiters get the result.
 //
-// The caller must call the returned release function (typically via defer) when
-// the proxied request completes. This decrements the in-flight counter and
-// allows the model to be evicted once idle.
-//
-// Errors:
-//   - context.Canceled / context.DeadlineExceeded: caller's context expired
-//   - "model is shutting down": model is being drained
-//   - "at capacity …": max_models reached with all models in use
-//   - "model … load failed: …": llama-server failed to start or become healthy
-func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config.ModelParams) (addr string, release func(), err error) {
+// The caller must call ticket.Release() (typically via defer) when the proxied
+// request completes to decrement the in-flight counter.
+func (m *Manager) LoadOrGet(modelName string, params config.ModelParams) *LoadTicket {
+	ticket := newTicket()
+
+	// Fast path: check under read lock to avoid goroutine overhead for
+	// the common already-loaded case.
+	m.mu.RLock()
+	ps, ok := m.procs[modelName]
+	m.mu.RUnlock()
+	if ok {
+		ps.mu.Lock()
+		state := ps.state
+		port := ps.port
+		ready := ps.ready
+		ps.mu.Unlock()
+
+		switch state {
+		case stateLoaded:
+			addr, rel, _ := ps.addInflight(port)
+			ticket.succeed(addr, rel)
+			return ticket
+		case stateLoading:
+			go func() {
+				<-ready
+				addr, rel, err := m.checkLoaded(modelName)
+				if err != nil {
+					ticket.fail(err)
+				} else {
+					ticket.succeed(addr, rel)
+				}
+			}()
+			return ticket
+		case stateUnloading:
+			ticket.fail(fmt.Errorf("%w: model %q", ErrModelDraining, modelName))
+			return ticket
+		}
+	}
+
+	var estimate uint64
+	if m.vram != nil {
+		estimate = m.vram.EstimateForModel(modelName)
+	}
+	go m.startLoad(ticket, modelName, params, estimate)
+	return ticket
+}
+
+// startLoad is the slow path of LoadOrGet: acquires the write lock, evicts if
+// needed, and either joins an in-progress load or starts a new supervisor.
+func (m *Manager) startLoad(ticket *LoadTicket, modelName string, params config.ModelParams, estimate uint64) {
 	m.mu.Lock()
 
+	// Re-check state under write lock; may have changed since fast-path check.
 	if ps, ok := m.procs[modelName]; ok {
 		ps.mu.Lock()
 		state := ps.state
@@ -407,31 +477,35 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 		switch state {
 		case stateLoaded:
 			m.mu.Unlock()
-			return ps.addInflight(port)
-
+			addr, rel, _ := ps.addInflight(port)
+			ticket.succeed(addr, rel)
+			return
 		case stateLoading:
 			m.mu.Unlock()
-			select {
-			case <-ready:
-			case <-ctx.Done():
-				return "", func() {}, ctx.Err()
+			<-ready
+			addr, rel, err := m.checkLoaded(modelName)
+			if err != nil {
+				ticket.fail(err)
+			} else {
+				ticket.succeed(addr, rel)
 			}
-			return m.checkLoaded(modelName)
-
+			return
 		case stateUnloading:
 			m.mu.Unlock()
-			return "", func() {}, fmt.Errorf("model %q is shutting down", modelName)
-
+			ticket.fail(fmt.Errorf("%w: model %q", ErrModelDraining, modelName))
+			return
 		case stateIdle:
 			delete(m.procs, modelName)
 		}
 	}
 
-	if err := m.evictIfNeeded(); err != nil {
+	if err := m.evictIfNeeded(modelName, estimate); err != nil {
 		m.mu.Unlock()
-		return "", func() {}, err
+		ticket.fail(err)
+		return
 	}
 
+	// evictIfNeeded releases and re-acquires m.mu; re-check for concurrent loads.
 	if ps2, ok := m.procs[modelName]; ok {
 		ps2.mu.Lock()
 		state2 := ps2.state
@@ -441,19 +515,23 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 		switch state2 {
 		case stateLoaded:
 			m.mu.Unlock()
-			return ps2.addInflight(port2)
+			addr, rel, _ := ps2.addInflight(port2)
+			ticket.succeed(addr, rel)
+			return
 		case stateLoading:
 			m.mu.Unlock()
-			select {
-			case <-ready2:
-			case <-ctx.Done():
-				return "", func() {}, ctx.Err()
+			<-ready2
+			addr, rel, err := m.checkLoaded(modelName)
+			if err != nil {
+				ticket.fail(err)
+			} else {
+				ticket.succeed(addr, rel)
 			}
-			return m.checkLoaded(modelName)
+			return
 		}
 	}
 
-	// Create a new procState and start the supervisor.
+	// Start a new supervisor.
 	modelCtx, modelCancel := context.WithCancel(m.ctx)
 	ps := &procState{
 		modelName: modelName,
@@ -478,13 +556,13 @@ func (m *Manager) LoadOrGet(ctx context.Context, modelName string, params config
 	ps.wg.Add(1)
 	go m.supervise(modelCtx, modelName)
 
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		return "", func() {}, ctx.Err()
+	<-ready
+	addr, rel, err := m.checkLoaded(modelName)
+	if err != nil {
+		ticket.fail(err)
+	} else {
+		ticket.succeed(addr, rel)
 	}
-
-	return m.checkLoaded(modelName)
 }
 
 // checkLoaded reads the outcome of a completed load (after ready has closed).
@@ -513,16 +591,18 @@ func (m *Manager) checkLoaded(modelName string) (addr string, release func(), er
 	return ps.addInflight(port)
 }
 
-// evictIfNeeded evicts the LRU idle healthy model if we are at capacity.
+// evictIfNeeded evicts the minimum set of idle models needed to admit a new
+// model, enforcing both the max_models count limit and the VRAM budget.
 //
-// IMPORTANT: must be called with m.mu write-locked. It temporarily releases
-// and re-acquires m.mu while waiting for the evicted supervisor to exit,
-// so the caller must re-validate procs state after it returns.
-func (m *Manager) evictIfNeeded() error {
+// Must be called with m.mu write-locked. It releases and re-acquires m.mu
+// while draining evicted supervisors, so the caller must re-validate procs
+// state after it returns.
+func (m *Manager) evictIfNeeded(modelName string, estimate uint64) error {
 	type candidate struct {
 		name     string
 		ps       *procState
 		lastUsed time.Time
+		vramEst  uint64
 	}
 	var candidates []candidate
 	running := 0
@@ -537,42 +617,91 @@ func (m *Manager) evictIfNeeded() error {
 			running++
 		}
 		if state == stateLoaded && ps.inflight.Load() == 0 {
-			candidates = append(candidates, candidate{name: name, ps: ps, lastUsed: lu})
+			vramEst := uint64(0)
+			if m.vram != nil {
+				vramEst = m.vram.EstimateForModel(name)
+			}
+			candidates = append(candidates, candidate{name: name, ps: ps, lastUsed: lu, vramEst: vramEst})
 		}
 	}
 
-	if running < m.cfg.MaxModels {
+	needCountEvict := m.cfg.MaxModels > 0 && running >= m.cfg.MaxModels
+	needVRAMEvict := m.vram != nil && estimate > 0 && m.vram.FreeVRAM() < estimate
+
+	if !needCountEvict && !needVRAMEvict {
 		return nil
 	}
 	if len(candidates) == 0 {
-		return fmt.Errorf("at capacity (%d/%d models); all models have in-flight requests", running, m.cfg.MaxModels)
+		if needVRAMEvict && !needCountEvict {
+			return fmt.Errorf("insufficient VRAM for %q; all loaded models have in-flight requests", modelName)
+		}
+		return fmt.Errorf("at capacity (%d/%d models); all loaded models have in-flight requests", running, m.cfg.MaxModels)
 	}
 
+	// Sort LRU: oldest first (evict least-recently-used first).
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].lastUsed.Before(candidates[j].lastUsed)
 	})
 
-	victim := candidates[0]
-	victim.ps.mu.Lock()
-	victim.ps.state = stateUnloading
-	victim.ps.mu.Unlock()
+	// Greedily select the minimum number of victims (LRU order) that satisfies
+	// both the count constraint and the VRAM budget.
+	var victims []candidate
+	countSatisfied := !needCountEvict
+	vramSatisfied := !needVRAMEvict
+	free := uint64(0)
+	if m.vram != nil {
+		free = m.vram.FreeVRAM()
+	}
+	vramFreed := uint64(0)
 
-	// Release the manager lock while waiting for the supervisor to exit.
+	for _, c := range candidates {
+		victims = append(victims, c)
+		running--
+		vramFreed += c.vramEst
+
+		if !countSatisfied && running < m.cfg.MaxModels {
+			countSatisfied = true
+		}
+		if !vramSatisfied && free+vramFreed >= estimate {
+			vramSatisfied = true
+		}
+		if countSatisfied && vramSatisfied {
+			break
+		}
+	}
+
+	if !countSatisfied || !vramSatisfied {
+		return fmt.Errorf("at capacity; cannot free enough resources for model %q", modelName)
+	}
+
+	// Mark all victims as unloading and release their VRAM reservations before
+	// dropping the lock — new requests will be rejected immediately.
+	for i := range victims {
+		victims[i].ps.mu.Lock()
+		victims[i].ps.state = stateUnloading
+		victims[i].ps.mu.Unlock()
+		if m.vram != nil {
+			m.vram.Release(victims[i].name)
+		}
+		m.log.Info("evicting model (LRU)", "model", victims[i].name)
+		m.publishEvent(monitor.ServerEvent{
+			Time:    time.Now(),
+			Backend: victims[i].name,
+			Kind:    monitor.EventModelLoad,
+			Message: "unloading (LRU eviction)",
+		})
+	}
+
+	// Release the manager lock while draining all victims concurrently.
 	m.mu.Unlock()
-
-	m.log.Info("evicting model (LRU)", "model", victim.name)
-	m.publishEvent(monitor.ServerEvent{
-		Time:    time.Now(),
-		Backend: victim.name,
-		Kind:    monitor.EventModelLoad,
-		Message: "unloading (LRU eviction)",
-	})
-
-	victim.ps.cancel()  // SIGTERM via context cancellation
-	victim.ps.wg.Wait() // wait for supervisor goroutine to exit
-
-	m.mu.Lock() // re-acquire for the caller
-	delete(m.procs, victim.name)
+	for _, v := range victims {
+		m.drainAndCancel(v.ps)
+		v.ps.wg.Wait()
+	}
+	m.mu.Lock()
+	for _, v := range victims {
+		delete(m.procs, v.name)
+	}
 	return nil
 }
 
@@ -741,6 +870,14 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 		}
 		firstLoad = false
 
+		if m.vram != nil {
+			if est := m.vram.EstimateForModel(modelName); est > 0 {
+				if !m.vram.Reserve(modelName, est) {
+					m.log.Warn("VRAM reservation failed after model load", "model", modelName)
+				}
+			}
+		}
+
 		m.log.Info("model healthy", "model", modelName, "port", port, "load_duration", loadDur)
 		m.publishEvent(monitor.ServerEvent{
 			Time:       time.Now(),
@@ -853,7 +990,19 @@ func (m *Manager) launch(ctx context.Context, modelName string, params config.Mo
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
+
+	setOOMScore(cmd.Process.Pid, m.log)
+
 	return cmd, parser, nil
+}
+
+// setOOMScore writes 1000 to /proc/<pid>/oom_score_adj so that the kernel
+// prefers killing llama-server over host processes under memory pressure.
+func setOOMScore(pid int, log *slog.Logger) {
+	path := fmt.Sprintf("/proc/%d/oom_score_adj", pid)
+	if err := os.WriteFile(path, []byte("1000"), 0); err != nil {
+		log.Warn("failed to set OOM score; process unprotected", "pid", pid, "err", err)
+	}
 }
 
 // buildArgs constructs the llama-server command-line arguments for a model.

@@ -22,8 +22,7 @@ func TestHandleWS_SnapshotOnConnect(t *testing.T) {
 			Loaded: true,
 			Port:   12345,
 		}}
-	}, nil, nil)
-	hub.gpus = nil
+	}, nil, nil, nil)
 	hub.Start()
 	defer hub.Stop()
 
@@ -75,8 +74,7 @@ func TestHandleWS_SnapshotOnConnect(t *testing.T) {
 
 func TestHandleWS_MetricsForwarded(t *testing.T) {
 	events := make(chan ServerEvent, 8)
-	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil }, nil, nil)
-	hub.gpus = nil
+	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil }, nil, nil, nil)
 	hub.Start()
 	defer hub.Stop()
 
@@ -157,8 +155,7 @@ func TestHandleWS_MetricsForwarded(t *testing.T) {
 
 func TestHandleWS_HubStop_ClosesConnection(t *testing.T) {
 	events := make(chan ServerEvent, 8)
-	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil }, nil, nil)
-	hub.gpus = nil
+	hub := NewHub(slog.Default(), events, func() []BackendStatus { return nil }, nil, nil, nil)
 	hub.Start()
 
 	srv := httptest.NewServer(http.HandlerFunc(HandleWS(hub)))

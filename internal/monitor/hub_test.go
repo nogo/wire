@@ -14,9 +14,7 @@ import (
 // channel. No GPU discovery runs (discoverGPUs returns empty on most hosts).
 func newTestHub(t *testing.T, events chan ServerEvent, backends []BackendStatus) *Hub {
 	t.Helper()
-	h := NewHub(slog.Default(), events, func() []BackendStatus { return backends }, nil, nil)
-	h.gpus = nil // disable GPU polling in unit tests
-	return h
+	return NewHub(slog.Default(), events, func() []BackendStatus { return backends }, nil, nil, nil)
 }
 
 func TestHub_Subscribe_getsSnapshot(t *testing.T) {
@@ -179,6 +177,41 @@ func TestHub_NCtx_noSlots(t *testing.T) {
 	}
 	if got := h.NCtx("mymodel"); got != 0 {
 		t.Errorf("NCtx = %d, want 0 for empty slots", got)
+	}
+}
+
+func TestHub_GPUTick_fromChannel(t *testing.T) {
+	gpuCh := make(chan []GPUMetrics, 4)
+	events := make(chan ServerEvent, 8)
+	h := NewHub(slog.Default(), events, func() []BackendStatus { return nil }, nil, nil, gpuCh)
+	h.Start()
+	defer h.Stop()
+
+	ch, unsub := h.Subscribe()
+	defer unsub()
+	<-ch // drain snapshot
+
+	want := []GPUMetrics{{Index: 0, Name: "Test GPU", VRAMTotal: 8 << 30, VRAMUsed: 2 << 30, TempC: 65.0, PowerW: 120.0}}
+	gpuCh <- want
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case msg := <-ch:
+			if msg.Kind != MsgGPUTick {
+				continue
+			}
+			if len(msg.GPUs) != 1 {
+				t.Fatalf("GPUs len: got %d, want 1", len(msg.GPUs))
+			}
+			got := msg.GPUs[0]
+			if got.Name != want[0].Name || got.VRAMTotal != want[0].VRAMTotal || got.VRAMUsed != want[0].VRAMUsed {
+				t.Errorf("GPU metrics mismatch: got %+v, want %+v", got, want[0])
+			}
+			return
+		case <-deadline:
+			t.Fatal("timeout waiting for MsgGPUTick")
+		}
 	}
 }
 

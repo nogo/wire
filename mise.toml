@@ -36,15 +36,15 @@ description = "Apply gofumpt formatting"
 run = "gofumpt -w ."
 
 [tasks."fmt:check"]
-description = "Apply gofumpt, then fail if any files were modified"
-depends = ["fmt"]
+description = "Fail if any .go files need gofumpt formatting (uses gofumpt -l, not git diff)"
 sources = ["**/*.go"]
 outputs = { auto = true }
 run = """
-DIRTY=$(git diff --name-only -- '*.go')
-if [[ -n "$DIRTY" ]]; then
-    echo "FAIL: gofumpt modified files (now fixed, stage and re-commit):"
-    echo "$DIRTY"
+NEEDS_FMT=$(gofumpt -l .)
+if [[ -n "$NEEDS_FMT" ]]; then
+    gofumpt -w .
+    echo "FAIL: gofumpt modified files (now fixed, re-stage and re-commit):"
+    echo "$NEEDS_FMT"
     exit 1
 fi
 """
@@ -52,8 +52,10 @@ fi
 [tasks.tidy]
 description = "Check go.mod and go.sum are tidy"
 run = """
+BEFORE=$(sha256sum go.mod go.sum 2>/dev/null)
 go mod tidy
-if [[ -n "$(git diff --name-only go.mod go.sum 2>/dev/null)" ]]; then
+AFTER=$(sha256sum go.mod go.sum 2>/dev/null)
+if [[ "$BEFORE" != "$AFTER" ]]; then
     echo "FAIL: go.mod/go.sum updated by tidy — commit the changes"
     exit 1
 fi

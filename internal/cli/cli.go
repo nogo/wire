@@ -13,6 +13,7 @@ import (
 	"github.com/nogo/wire/internal/gateway"
 	"github.com/nogo/wire/internal/monitor"
 	"github.com/nogo/wire/internal/process"
+	"github.com/nogo/wire/internal/vram"
 )
 
 const usageText = `Usage: wire <command> [arguments]
@@ -69,6 +70,15 @@ func runUp() error {
 	shutCtx, stop := signal.NotifyContext(bgCtx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	// 2. VRAM tracker init (GPU auto-detect, HF cache scan).
+	backend := detectGPUBackend(cfg)
+	tracker := vram.New(backend, vram.NewHFCache(cfg.HFCacheDir))
+	gpus := tracker.Discover()
+	tracker.HFCache().Scan()
+	tracker.Start()
+	defer tracker.Stop()
+
+	// 3. Process manager init.
 	mgr := process.New(cfg, slog.Default())
 	if err := mgr.Start(bgCtx); err != nil {
 		return fmt.Errorf("starting process manager: %w", err)
@@ -103,11 +113,13 @@ func runUp() error {
 		}
 	}
 
+	// 4. Hub init (subscribes to VRAM tracker for GPU state).
 	var hub *monitor.Hub
 	if cfg.Monitor {
-		hub = monitor.NewHub(slog.Default(), mgr.Events(), mgr.Snapshot, remote, nil)
+		hub = monitor.NewHub(slog.Default(), mgr.Events(), mgr.Snapshot, remote, discovery, tracker.GPUStateCh())
 	}
 
+	// 5. Gateway init (uses VRAM tracker + queue).
 	gw := gateway.New(cfg, mgr, hub, remote, discovery, slog.Default())
 
 	if hub != nil {
@@ -117,6 +129,11 @@ func runUp() error {
 		hub.Start()
 		defer hub.Stop()
 	}
+
+	// 6. Warmup models submitted through gateway's admission path (config order,
+	// bounded retry). Runs in background so the gateway serves requests immediately.
+	go gw.Warmup(bgCtx)
+
 	gwErrCh := make(chan error, 1)
 	go func() { gwErrCh <- gw.ListenAndServe(shutCtx) }()
 
@@ -127,7 +144,7 @@ func runUp() error {
 		reloadCh = ch
 	}
 
-	slog.Info("wire ready", "listen", cfg.Listen, "version", internal.Version, "commit", internal.Commit)
+	slog.Info("wire ready", "listen", cfg.Listen, "version", internal.Version, "commit", internal.Commit, "gpus", len(gpus))
 
 	for {
 		select {
@@ -167,4 +184,14 @@ func runUp() error {
 			cfg = newCfg
 		}
 	}
+}
+
+// detectGPUBackend returns the appropriate vram.Backend following the
+// auto-detection chain: AMD sysfs → noop (CPU-only).
+func detectGPUBackend(_ *config.Config) vram.Backend {
+	sysfs := vram.NewSysfsBackend()
+	if gpus := sysfs.Discover(); len(gpus) > 0 {
+		return sysfs
+	}
+	return vram.NoopBackend{}
 }

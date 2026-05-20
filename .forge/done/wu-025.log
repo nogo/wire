@@ -1,0 +1,15 @@
+All tests pass and the implementation is complete. Here's what changed:
+
+**`internal/process/ticket.go`** — Added `ErrModelDraining` sentinel so the gateway can detect the stateUnloading case with `errors.Is`.
+
+**`internal/process/manager.go`** — Both stateUnloading branches in `LoadOrGet` and `startLoad` now wrap `ErrModelDraining` instead of a plain format string.
+
+**`internal/gateway/gateway.go`**:
+- Added `*queue.Queue` field to `Gateway`
+- `newGateway` creates the queue (depth from `cfg.QueueDepth`, fallback 200) with a `LoadFunc` that wraps `mgr.LoadOrGet`, handling context cancellation by draining the manager ticket in a background goroutine to prevent inflight count leaks
+- `handleRoute` replaced `mgr.LoadOrGet` with `q.Enqueue(model, pathPriority(path), r.Context())`
+- Error handling: `ErrQueueFull` → 503 Retry-After:5, `ErrModelEvicted`/`ErrModelDraining` → 503 Retry-After:10, `DeadlineExceeded` → 504, other → 503
+- Remote provider path and OpenAI contract are unchanged
+- Added `pathPriority`: chat/completions=High, completions=Medium, embeddings/rerank=Low
+
+**`internal/gateway/gateway_test.go`** — Added `TestGateway_HandleRoute_QueueFull`, `TestGateway_HandleRoute_ModelDraining`, and `TestGateway_HandleRoute_QueuePriority`.

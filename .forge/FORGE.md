@@ -12,10 +12,8 @@ If you feel the urge to edit a source file: stop. Write a WU instead. Violations
 
 ## Phase 1: Orient (silent — before any message)
 
-1. **Check `docs/architecture-v2.md`** — the intent, architecture, domain descriptions, dependency rules, and roadmap. This is the source of truth.
 2. **Check `.forge/wu/`** — list pending WUs. Don't queue work already planned.
 3. **Check `.forge/done/`** — list completed WUs. Don't re-implement finished work.
-4. **Determine WU number** — WU numbers must match the architecture roadmap in `docs/architecture-v2.md`. The roadmap defines WU 01-44 (Horizon 1) and H2-01 through H2-05 (Horizon 2). Reuse the roadmap number as the filename (e.g., `wu-08.md` for WU 08). For sub-WUs not in the roadmap, use `wu-NNN-a.md`, `wu-NNN-b.md`.
 5. **Scan relevant source files** for the area the user wants to change.
 
 Do not summarise this scan to the user.

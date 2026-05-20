@@ -1,0 +1,4 @@
+All tests pass. Here's what was done:
+
+- `drain_timeout` (default 30s) and `queue_depth` (default 200) were already implemented in `config.go:65-68` and `applyDefaults:199-205`. Added tests covering both defaults (`TestLoad_Defaults`) and explicit values (`TestLoad_DrainTimeoutAndQueueDepth`).
+- Added warmup VRAM check in `cli.go:79-83` — runs after GPU discovery and HF cache scan, logs `slog.Warn` per model when we have an estimate that won't fit, then continues startup normally.

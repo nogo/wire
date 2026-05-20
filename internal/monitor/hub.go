@@ -59,12 +59,13 @@ type HubMessage struct {
 }
 
 // Hub subscribes to the event channel from Manager, polls each backend's HTTP
-// endpoints and GPU sysfs files every second, and fans out to subscribers.
+// endpoints every second, and fans out to subscribers. GPU state is received
+// from the VRAM tracker via gpuStateCh instead of polling sysfs directly.
 type Hub struct {
 	log           *slog.Logger
 	events        <-chan ServerEvent
 	snapshotFn    func() []BackendStatus
-	gpus          []GPUInfo
+	gpuStateCh    <-chan []GPUMetrics
 	remote        *RemoteTracker
 	modelProvider func() []ModelInfo
 
@@ -93,13 +94,15 @@ func (h *Hub) SetModelProvider(fn func() []ModelInfo) {
 // NewHub creates a Hub. snapshotFn is called on every poll tick to obtain
 // current backend addresses (Manager.Snapshot satisfies this). remote may be
 // nil; when non-nil, remote provider metrics are included in the poll loop.
+// gpuStateCh delivers GPU metrics from the VRAM tracker (may be nil).
 // Call Start to begin the event relay and poll loop.
-func NewHub(log *slog.Logger, events <-chan ServerEvent, snapshotFn func() []BackendStatus, remote *RemoteTracker, _ *ModelDiscovery) *Hub {
+func NewHub(log *slog.Logger, events <-chan ServerEvent, snapshotFn func() []BackendStatus, remote *RemoteTracker, _ *ModelDiscovery, gpuStateCh <-chan []GPUMetrics) *Hub {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &Hub{
 		log:        log,
 		events:     events,
 		snapshotFn: snapshotFn,
+		gpuStateCh: gpuStateCh,
 		remote:     remote,
 		metrics:    make(map[string]*BackendMetrics),
 		remoteData: make(map[string]RemoteStats),
@@ -108,7 +111,6 @@ func NewHub(log *slog.Logger, events <-chan ServerEvent, snapshotFn func() []Bac
 		cancel:     cancel,
 		client:     &http.Client{Timeout: 3 * time.Second},
 	}
-	h.gpus = DiscoverGPUs()
 	return h
 }
 
@@ -117,9 +119,13 @@ func (h *Hub) Start() {
 	h.wg.Add(2)
 	go h.relayEvents()
 	go h.pollLoop()
+	if h.gpuStateCh != nil {
+		h.wg.Add(1)
+		go h.gpuStateLoop()
+	}
 }
 
-// Stop cancels both goroutines, waits for them to exit, then closes all
+// Stop cancels all goroutines, waits for them to exit, then closes all
 // subscriber channels. No goroutines are leaked after Stop returns.
 func (h *Hub) Stop() {
 	h.cancel()
@@ -234,14 +240,6 @@ func (h *Hub) poll() {
 		h.broadcast(HubMessage{Kind: MsgMetricsTick, Metrics: m})
 	}
 
-	gpuMetrics := ReadGPUMetrics(h.gpus)
-	h.mu.Lock()
-	h.gpuData = gpuMetrics
-	h.mu.Unlock()
-	if len(gpuMetrics) > 0 {
-		h.broadcast(HubMessage{Kind: MsgGPUTick, GPUs: gpuMetrics})
-	}
-
 	if h.remote != nil {
 		snap := h.remote.Snapshot()
 		h.mu.Lock()
@@ -317,6 +315,27 @@ func (h *Hub) broadcast(msg HubMessage) {
 		case ch <- msg:
 		default:
 			// Drop to slow consumer.
+		}
+	}
+}
+
+// gpuStateLoop receives GPU metrics from the VRAM tracker and broadcasts them.
+func (h *Hub) gpuStateLoop() {
+	defer h.wg.Done()
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case metrics, ok := <-h.gpuStateCh:
+			if !ok {
+				return
+			}
+			h.mu.Lock()
+			h.gpuData = metrics
+			h.mu.Unlock()
+			if len(metrics) > 0 {
+				h.broadcast(HubMessage{Kind: MsgGPUTick, GPUs: metrics})
+			}
 		}
 	}
 }

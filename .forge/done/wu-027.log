@@ -1,0 +1,15 @@
+All tests pass. Here's what was implemented for WU-027:
+
+**Changes to `internal/integration_test.go`:**
+
+1. **Enhanced `TestHotReload_HelperProcess`** — now parses `--health-delay-ms=N` flags after a `--` separator, matching the pattern used by `TestHelperProcess` in `process/manager_test.go`. Existing tests are unaffected (no `--` in their args → delay stays 0).
+
+2. **`integrationCmdBuilderWithDelay(delayMs int)`** — new cmd builder factory that passes `--health-delay-ms` to the fake subprocess, enabling controlled startup timing in coalescing tests.
+
+3. **`waitGatewayReady`** — extracted helper used by both the refactored `TestHotReload_GatewayRoutesAfterUpdate` and the new tests.
+
+4. **`TestIntegration_CoalescedLoading`** — 10 concurrent HTTP requests through the gateway for an unloaded model with a 300ms health delay; verifies all return 200 and exactly one process is running. Also verifies `oom_score_adj=1000` on the running process PID via `m.Snapshot()`.
+
+5. **`TestIntegration_QueuePriorityRouting`** — exercises the full gateway path for all three priority tiers (`/v1/chat/completions` → High, `/v1/completions` → Medium, `/v1/embeddings` → Low); all succeed. Budget enforcement is already exhaustively covered by `queue_test.go` (`TestPriorityBudgets`, `TestPriorityOrdering`).
+
+6. **`TestIntegration_DrainAndRequeue`** — loads model-a, drains it via `Reload` with an empty config, confirms it's gone from `RunningModels`, then reloads the original config and verifies the model loads again via a fresh ticket.

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -60,6 +61,12 @@ warmup:
 	}
 	if cfg.Models["org/model"].Slots != 1 {
 		t.Errorf("slots default: got %d, want 1", cfg.Models["org/model"].Slots)
+	}
+	if cfg.DrainTimeout != Duration(30*time.Second) {
+		t.Errorf("drain_timeout default: got %v, want 30s", cfg.DrainTimeout)
+	}
+	if cfg.QueueDepth != 200 {
+		t.Errorf("queue_depth default: got %d, want 200", cfg.QueueDepth)
 	}
 }
 
@@ -131,6 +138,28 @@ warmup:
 
 	if len(cfg.Warmup) != 2 {
 		t.Errorf("warmup len: got %d, want 2", len(cfg.Warmup))
+	}
+}
+
+func TestLoad_DrainTimeoutAndQueueDepth(t *testing.T) {
+	path := writeConfig(t, `
+drain_timeout: "1m"
+queue_depth: 500
+models:
+  "org/model":
+    context: 2048
+`)
+	setEnv(t, "WIRE_CONFIG", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DrainTimeout != Duration(time.Minute) {
+		t.Errorf("drain_timeout: got %v, want 1m", cfg.DrainTimeout)
+	}
+	if cfg.QueueDepth != 500 {
+		t.Errorf("queue_depth: got %d, want 500", cfg.QueueDepth)
 	}
 }
 

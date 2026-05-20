@@ -8,9 +8,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// Duration is a time.Duration that unmarshals from a YAML string like "30s".
+type Duration time.Duration
+
+func (d *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err != nil {
+		return err
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = Duration(dur)
+	return nil
+}
 
 // Path returns the resolved config file path.
 // Resolution order: WIRE_CONFIG env var → XDG_CONFIG_HOME/wire/config.yaml →
@@ -41,12 +58,15 @@ func (p Provider) ShouldListModels() bool {
 }
 
 type Config struct {
-	Listen    string                 `yaml:"listen"`
-	Monitor   bool                   `yaml:"monitor"`
-	MaxModels int                    `yaml:"max_models"`
-	Providers map[string]Provider    `yaml:"providers"`
-	Models    map[string]ModelParams `yaml:"models"`
-	Warmup    []string               `yaml:"warmup"`
+	Listen       string                 `yaml:"listen"`
+	Monitor      bool                   `yaml:"monitor"`
+	MaxModels    int                    `yaml:"max_models"`
+	HFCacheDir   string                 `yaml:"hf_cache_dir"`
+	DrainTimeout Duration               `yaml:"drain_timeout"`
+	QueueDepth   int                    `yaml:"queue_depth"`
+	Providers    map[string]Provider    `yaml:"providers"`
+	Models       map[string]ModelParams `yaml:"models"`
+	Warmup       []string               `yaml:"warmup"`
 }
 
 type ModelParams struct {
@@ -171,6 +191,18 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.MaxModels == 0 {
 		cfg.MaxModels = 1
+	}
+	if cfg.HFCacheDir == "" {
+		home, _ := os.UserHomeDir()
+		cfg.HFCacheDir = filepath.Join(home, ".cache", "huggingface", "hub")
+	}
+	if cfg.DrainTimeout == Duration(0) {
+		cfg.DrainTimeout = Duration(30 * time.Second)
+	} else {
+		_ = time.Duration(cfg.DrainTimeout) // ensure valid
+	}
+	if cfg.QueueDepth == 0 {
+		cfg.QueueDepth = 200
 	}
 	for pattern, p := range cfg.Models {
 		if p.Slots == 0 && !p.IsRemote() {

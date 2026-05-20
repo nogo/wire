@@ -8,13 +8,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/gateway/queue"
 	"github.com/nogo/wire/internal/monitor"
+	"github.com/nogo/wire/internal/process"
 )
 
-// mockManager is a test double for backendManager.
+// mockManager is a test double for processManager.
 type mockManager struct {
 	addrs  map[string]string
 	loaded map[string]bool
@@ -28,19 +32,29 @@ func (m *mockManager) Loaded(name string) bool {
 	return m.loaded[name]
 }
 
-func (m *mockManager) LoadOrGet(_ context.Context, name string, _ config.ModelParams) (string, func(), error) {
+func (m *mockManager) LoadOrGet(name string, _ config.ModelParams) *process.LoadTicket {
+	var addr string
+	var rel func()
+	var err error
+
 	if m.loadOrGetFn != nil {
-		return m.loadOrGetFn(name)
+		addr, rel, err = m.loadOrGetFn(name)
+	} else if !m.loaded[name] {
+		return process.NewFailedTicket(context.DeadlineExceeded)
+	} else {
+		a, ok := m.addrs[name]
+		if !ok {
+			err = &unavailableError{name}
+		} else {
+			addr = a
+			rel = func() {}
+		}
 	}
-	// Default: return addr if healthy, error otherwise.
-	if !m.loaded[name] {
-		return "", func() {}, context.DeadlineExceeded // triggers 504 — use a different sentinel
+
+	if err != nil {
+		return process.NewFailedTicket(err)
 	}
-	addr, ok := m.addrs[name]
-	if !ok {
-		return "", func() {}, &unavailableError{name}
-	}
-	return addr, func() {}, nil
+	return process.NewReadyTicket(addr, rel)
 }
 
 func (m *mockManager) ListModels() []monitor.ModelInfo {
@@ -844,6 +858,199 @@ func TestGateway_HandleRoute_DiscoveredModel(t *testing.T) {
 	g.handleRoute(w2, r2)
 	if w2.Code != http.StatusNotFound {
 		t.Errorf("unknown model status = %d, want 404", w2.Code)
+	}
+}
+
+func TestGateway_HandleRoute_QueueFull(t *testing.T) {
+	cfg := testConfig("org/model", 1, "")
+	mgr := &mockManager{
+		addrs:  map[string]string{"org/model": "http://localhost:9999"},
+		loaded: map[string]bool{"org/model": true},
+	}
+	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	// Replace queue with a zero-depth instance so every enqueue fails immediately.
+	g.q = queue.New(0, func(_ context.Context, _ string) (string, func(), error) {
+		return "", nil, nil
+	})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/model","messages":[]}`))
+	g.handleRoute(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", w.Code)
+	}
+	if ra := w.Result().Header.Get("Retry-After"); ra != "5" {
+		t.Errorf("Retry-After = %q, want %q", ra, "5")
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj["code"] != "queue_full" {
+		t.Errorf("error code = %v, want queue_full", errObj["code"])
+	}
+}
+
+func TestGateway_HandleRoute_ModelDraining(t *testing.T) {
+	cfg := testConfig("org/model", 1, "")
+	mgr := &mockManager{
+		loadOrGetFn: func(name string) (string, func(), error) {
+			return "", func() {}, process.ErrModelDraining
+		},
+	}
+	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"org/model","messages":[]}`))
+	g.handleRoute(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", w.Code)
+	}
+	if ra := w.Result().Header.Get("Retry-After"); ra != "10" {
+		t.Errorf("Retry-After = %q, want %q", ra, "10")
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj["code"] != "model_draining" {
+		t.Errorf("error code = %v, want model_draining", errObj["code"])
+	}
+}
+
+func TestGateway_HandleRoute_QueuePriority(t *testing.T) {
+	tests := []struct {
+		path string
+		want queue.Priority
+	}{
+		{"/v1/chat/completions", queue.PriorityHigh},
+		{"/v1/completions", queue.PriorityMedium},
+		{"/v1/embeddings", queue.PriorityLow},
+		{"/v1/rerank", queue.PriorityLow},
+	}
+	for _, tc := range tests {
+		if got := pathPriority(tc.path); got != tc.want {
+			t.Errorf("pathPriority(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Warmup tests
+// ---------------------------------------------------------------------------
+
+func TestGateway_Warmup_Success(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"org/model","choices":[]}`)) //nolint:errcheck
+	}))
+	defer backend.Close()
+
+	cfg := testConfig("org/model", 1, "")
+	mgr := &mockManager{
+		addrs:  map[string]string{"org/model": backend.URL},
+		loaded: map[string]bool{"org/model": true},
+	}
+	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g.warmupInterval = time.Millisecond // fast retry for tests
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g.Warmup(ctx) // should return quickly after model loads
+}
+
+func TestGateway_Warmup_AllAttemptsRetried(t *testing.T) {
+	cfg := testConfig("org/model", 1, "")
+	// Zero-depth queue forces ErrQueueFull on every attempt.
+	mgr := &mockManager{
+		loaded: map[string]bool{"org/model": false},
+	}
+	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g.warmupInterval = time.Millisecond // fast retry for tests
+	g.q = queue.New(0, func(_ context.Context, _ string) (string, func(), error) {
+		return "", nil, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g.Warmup(ctx) // should exhaust all 3 attempts and return without error
+}
+
+func TestGateway_Warmup_ContextCancelled(t *testing.T) {
+	cfg := testConfig("org/model", 1, "")
+	mgr := &mockManager{loaded: map[string]bool{"org/model": false}}
+	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g.warmupInterval = 10 * time.Second // long delay to ensure cancel fires first
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	done := make(chan struct{})
+	go func() {
+		g.Warmup(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Error("Warmup did not return after context cancellation")
+	}
+}
+
+func TestGateway_Warmup_ConfigOrder(t *testing.T) {
+	var loaded []string
+	var mu sync.Mutex
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[]}`)) //nolint:errcheck
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		Listen: ":0",
+		Models: map[string]config.ModelParams{
+			"org/a": {Slots: 1},
+			"org/b": {Slots: 1},
+			"org/c": {Slots: 1},
+		},
+		Warmup:    []string{"org/a", "org/b", "org/c"},
+		MaxModels: 3,
+	}
+	mgr := &mockManager{
+		addrs:  map[string]string{"org/a": backend.URL, "org/b": backend.URL, "org/c": backend.URL},
+		loaded: map[string]bool{"org/a": true, "org/b": true, "org/c": true},
+		loadOrGetFn: func(name string) (string, func(), error) {
+			mu.Lock()
+			loaded = append(loaded, name)
+			mu.Unlock()
+			return backend.URL, func() {}, nil
+		},
+	}
+	g := newGateway(cfg, mgr, nil, nil, nil, slog.Default())
+	g.warmupInterval = time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g.Warmup(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 models loaded, got %d: %v", len(loaded), loaded)
+	}
+	// Order must match Warmup slice order.
+	want := []string{"org/a", "org/b", "org/c"}
+	for i, name := range want {
+		if loaded[i] != name {
+			t.Errorf("position %d: got %q, want %q", i, loaded[i], name)
+		}
 	}
 }
 

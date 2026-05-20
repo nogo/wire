@@ -1,0 +1,10 @@
+All 8 packages pass. 
+
+**WU-024 is complete.** The implementation was already in place from prior work units:
+
+- Hub has no GPU polling code — `poll()` only handles `/metrics`, `/slots`, `/props`, remote stats, and model discovery
+- `gpuStateLoop()` in Hub receives `[]GPUMetrics` from `gpuStateCh` and broadcasts `MsgGPUTick`
+- VRAM tracker's `pollLoop()` → `pushGPUState()` reads from the backend and sends to the channel
+- CLI wires `tracker.GPUStateCh()` into `NewHub`
+
+The only addition was `TestHub_GPUTick_fromChannel` in `hub_test.go`, which covers the channel-to-broadcast path end-to-end.

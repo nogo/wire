@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/monitor"
+	"github.com/nogo/wire/internal/vram"
 )
 
 // ---------------------------------------------------------------------------
@@ -152,6 +154,33 @@ func newTestManager(cfg *config.Config) *Manager {
 	return m
 }
 
+// loadOrGetWait is a test helper that calls LoadOrGet and blocks until the
+// ticket resolves or ctx is cancelled, mimicking the old synchronous signature.
+func loadOrGetWait(ctx context.Context, m *Manager, modelName string, params config.ModelParams) (addr string, release func(), err error) {
+	ticket := m.LoadOrGet(modelName, params)
+	select {
+	case a, ok := <-ticket.Ready():
+		if !ok {
+			return "", func() {}, ticket.Err()
+		}
+		return a, ticket.Release, nil
+	case <-ctx.Done():
+		return "", func() {}, ctx.Err()
+	}
+}
+
+// mockVRAMBackend is a static VRAM backend for testing VRAM-aware eviction.
+type mockVRAMBackend struct {
+	total uint64
+	used  uint64
+}
+
+func (b *mockVRAMBackend) Discover() []monitor.GPUInfo       { return nil }
+func (b *mockVRAMBackend) ReadMetrics() []monitor.GPUMetrics { return nil }
+func (b *mockVRAMBackend) TotalVRAM() uint64                 { return b.total }
+func (b *mockVRAMBackend) UsedVRAM() uint64                  { return b.used }
+func (b *mockVRAMBackend) IsNoop() bool                      { return false }
+
 // ---------------------------------------------------------------------------
 // Unit tests — pure functions
 // ---------------------------------------------------------------------------
@@ -274,12 +303,39 @@ func TestManager_LoadedMissing(t *testing.T) {
 	}
 }
 
+func TestLaunch_OOMScoreAdj(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := New(&config.Config{}, slog.Default())
+	m.SetCmdBuilder(testCmdBuilder)
+
+	cmd, _, err := m.launch(ctx, "org/test-model", config.ModelParams{})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	defer func() {
+		cancel()
+		cmd.Wait() //nolint:errcheck
+	}()
+
+	pid := cmd.Process.Pid
+	path := fmt.Sprintf("/proc/%d/oom_score_adj", pid)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	got := strings.TrimSpace(string(raw))
+	if got != "1000" {
+		t.Errorf("oom_score_adj = %q, want \"1000\"", got)
+	}
+}
+
 func TestManager_StartStop(t *testing.T) {
 	cfg := &config.Config{
 		Models: map[string]config.ModelParams{
 			"org/test-model": {Slots: 1},
 		},
-		Warmup:    []string{"org/test-model"},
 		MaxModels: 1,
 	}
 	m := newTestManager(cfg)
@@ -291,22 +347,15 @@ func TestManager_StartStop(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Poll until healthy (up to 10s for the subprocess to spin up).
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if m.Loaded("org/test-model") {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	// Warmup goes through the gateway; load the model explicitly here.
+	addr, release, err := loadOrGetWait(ctx, m, "org/test-model", cfg.Models["org/test-model"])
+	if err != nil {
+		t.Fatalf("LoadOrGet: %v", err)
 	}
+	release()
 
 	if !m.Loaded("org/test-model") {
 		t.Fatal("model did not become healthy within 10s")
-	}
-
-	addr, ok := m.Addr("org/test-model")
-	if !ok {
-		t.Fatal("Addr: expected ok=true after healthy")
 	}
 	if addr == "" {
 		t.Error("Addr: returned empty string")
@@ -355,7 +404,7 @@ func TestLoadOrGet_Coalescing(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			addr, release, err := m.LoadOrGet(ctx, "org/model-a", params)
+			addr, release, err := loadOrGetWait(ctx, m, "org/model-a", params)
 			if err != nil {
 				t.Errorf("goroutine %d: LoadOrGet error: %v", i, err)
 				return
@@ -403,11 +452,15 @@ func TestLoadOrGet_LRUEviction(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Wait for warmup model A to become healthy.
-	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+	// Load model A explicitly; warmup goes through the gateway admission path.
+	_, releaseA0, err := loadOrGetWait(ctx, m, "org/model-a", cfg.Models["org/model-a"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-a (initial): %v", err)
+	}
+	releaseA0()
 
 	// Request model B: should evict A and load B.
-	addrB, releaseB, err := m.LoadOrGet(ctx, "org/model-b", cfg.Models["org/model-b"])
+	addrB, releaseB, err := loadOrGetWait(ctx, m, "org/model-b", cfg.Models["org/model-b"])
 	if err != nil {
 		t.Fatalf("LoadOrGet model-b: %v", err)
 	}
@@ -424,7 +477,7 @@ func TestLoadOrGet_LRUEviction(t *testing.T) {
 	}
 
 	// Request model A again: should evict B and reload A.
-	addrA2, releaseA2, err := m.LoadOrGet(ctx, "org/model-a", cfg.Models["org/model-a"])
+	addrA2, releaseA2, err := loadOrGetWait(ctx, m, "org/model-a", cfg.Models["org/model-a"])
 	if err != nil {
 		t.Fatalf("LoadOrGet model-a (reload): %v", err)
 	}
@@ -460,17 +513,15 @@ func TestLoadOrGet_InFlightProtection(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
-
-	// Hold an in-flight request against model A.
-	_, releaseA, err := m.LoadOrGet(ctx, "org/model-a", cfg.Models["org/model-a"])
+	// Hold an in-flight request against model A (also loads it).
+	_, releaseA, err := loadOrGetWait(ctx, m, "org/model-a", cfg.Models["org/model-a"])
 	if err != nil {
 		t.Fatalf("LoadOrGet model-a: %v", err)
 	}
 	// Do NOT call releaseA yet — this keeps inflight > 0.
 
 	// Requesting model B at max_models=1 must fail because A has in-flight requests.
-	_, _, err = m.LoadOrGet(ctx, "org/model-b", cfg.Models["org/model-b"])
+	_, _, err = loadOrGetWait(ctx, m, "org/model-b", cfg.Models["org/model-b"])
 	if err == nil {
 		t.Fatal("expected error when trying to evict a model with in-flight requests, got nil")
 	}
@@ -478,7 +529,7 @@ func TestLoadOrGet_InFlightProtection(t *testing.T) {
 	// Now release A; the next request for B should succeed.
 	releaseA()
 
-	_, releaseB, err := m.LoadOrGet(ctx, "org/model-b", cfg.Models["org/model-b"])
+	_, releaseB, err := loadOrGetWait(ctx, m, "org/model-b", cfg.Models["org/model-b"])
 	if err != nil {
 		t.Fatalf("LoadOrGet model-b after release: %v", err)
 	}
@@ -509,7 +560,7 @@ func TestLoadOrGet_ContextCancellation(t *testing.T) {
 	cancelCtx, cancelFn := context.WithCancel(bgCtx)
 	cancelFn() // cancel before LoadOrGet returns
 
-	_, _, err := m.LoadOrGet(cancelCtx, "org/model-a", params)
+	_, _, err := loadOrGetWait(cancelCtx, m, "org/model-a", params)
 	if err == nil {
 		t.Log("first request: LoadOrGet returned before context cancelled (load was fast)")
 	} else if !errors.Is(err, context.Canceled) {
@@ -518,7 +569,7 @@ func TestLoadOrGet_ContextCancellation(t *testing.T) {
 
 	// The supervisor should still be running (using the manager's detached context).
 	// A second request with a valid context should succeed.
-	addr, release, err := m.LoadOrGet(bgCtx, "org/model-a", params)
+	addr, release, err := loadOrGetWait(bgCtx, m, "org/model-a", params)
 	if err != nil {
 		t.Fatalf("second LoadOrGet: %v", err)
 	}
@@ -553,7 +604,7 @@ func TestLoadOrGet_LoadFailure(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			_, _, errs[i] = m.LoadOrGet(bgCtx, "org/bad-model", params)
+			_, _, errs[i] = loadOrGetWait(bgCtx, m, "org/bad-model", params)
 		}(i)
 	}
 	wg.Wait()
@@ -594,17 +645,17 @@ func TestLoadOrGet_CapacityLimit(t *testing.T) {
 	params := config.ModelParams{Slots: 1}
 
 	// Load both models and hold in-flight requests.
-	_, releaseA, err := m.LoadOrGet(bgCtx, "org/model-a", params)
+	_, releaseA, err := loadOrGetWait(bgCtx, m, "org/model-a", params)
 	if err != nil {
 		t.Fatalf("LoadOrGet model-a: %v", err)
 	}
-	_, releaseB, err := m.LoadOrGet(bgCtx, "org/model-b", params)
+	_, releaseB, err := loadOrGetWait(bgCtx, m, "org/model-b", params)
 	if err != nil {
 		t.Fatalf("LoadOrGet model-b: %v", err)
 	}
 
 	// Third model with both in-flight: must fail.
-	_, _, err = m.LoadOrGet(bgCtx, "org/model-c", config.ModelParams{Slots: 1})
+	_, _, err = loadOrGetWait(bgCtx, m, "org/model-c", config.ModelParams{Slots: 1})
 	if err == nil {
 		t.Fatal("expected capacity error for third model with all models busy, got nil")
 	}
@@ -633,7 +684,11 @@ func TestReload_ParamsChanged(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+	_, rel, err := loadOrGetWait(ctx, m, "org/model-a", cfg.Models["org/model-a"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-a: %v", err)
+	}
+	rel()
 
 	// New config: same model, different params.
 	newCfg := &config.Config{
@@ -663,12 +718,11 @@ func TestReload_ParamsUnchanged(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
-
-	addrBefore, ok := m.Addr("org/model-a")
-	if !ok {
-		t.Fatal("Addr: expected ok=true before Reload")
+	addrBefore, rel, err := loadOrGetWait(ctx, m, "org/model-a", cfg.Models["org/model-a"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-a: %v", err)
 	}
+	rel()
 
 	// Same params — should be a no-op for this model.
 	newCfg := &config.Config{
@@ -706,7 +760,11 @@ func TestReload_RemovedModel(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+	_, rel, err := loadOrGetWait(ctx, m, "org/model-a", cfg.Models["org/model-a"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-a: %v", err)
+	}
+	rel()
 
 	// New config: model-a removed entirely.
 	newCfg := &config.Config{
@@ -747,7 +805,11 @@ func TestReload_NewWarmupModel(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitLoadedModel(t, m, "org/model-a", 10*time.Second)
+	_, rel, err := loadOrGetWait(ctx, m, "org/model-a", cfg.Models["org/model-a"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-a: %v", err)
+	}
+	rel()
 
 	// New config: add model-b to warmup.
 	newCfg := &config.Config{
@@ -762,6 +824,196 @@ func TestReload_NewWarmupModel(t *testing.T) {
 
 	// model-b should be started and eventually healthy.
 	waitLoadedModel(t, m, "org/model-b", 10*time.Second)
+}
+
+// TestLoadOrGet_TicketAsync verifies that LoadOrGet returns a ticket immediately
+// without blocking even when the model has not yet loaded.
+func TestLoadOrGet_TicketAsync(t *testing.T) {
+	cfg := &config.Config{
+		Models:    map[string]config.ModelParams{"org/model-a": {Slots: 1}},
+		MaxModels: 1,
+	}
+	m := New(cfg, slog.Default())
+	m.cmdBuilder = testCmdBuilderWithDelay(200) // 200ms health delay
+
+	bgCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(bgCtx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	start := time.Now()
+	ticket := m.LoadOrGet("org/model-a", config.ModelParams{Slots: 1})
+	elapsed := time.Since(start)
+	if elapsed > 50*time.Millisecond {
+		t.Errorf("LoadOrGet took %v; expected near-immediate return", elapsed)
+	}
+
+	select {
+	case addr, ok := <-ticket.Ready():
+		if !ok {
+			t.Fatalf("ticket failed: %v", ticket.Err())
+		}
+		if addr == "" {
+			t.Error("got empty addr")
+		}
+		ticket.Release()
+	case <-time.After(10 * time.Second):
+		t.Fatal("ticket did not resolve within 10s")
+	}
+}
+
+// TestLoadOrGet_Drain verifies drain behavior: once a model is in stateUnloading,
+// new requests fail immediately; drainAndCancel waits for the inflight counter
+// to reach zero (or the timeout) before sending SIGTERM.
+func TestLoadOrGet_Drain(t *testing.T) {
+	cfg := &config.Config{
+		Models: map[string]config.ModelParams{
+			"org/model-a": {Slots: 1},
+			"org/model-b": {Slots: 1},
+		},
+		Warmup:    []string{"org/model-a"},
+		MaxModels: 1,
+	}
+	m := newTestManager(cfg)
+	m.drainTimeout = 500 * time.Millisecond
+
+	bgCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(bgCtx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Load then release model-a so it is idle (inflight=0, evictable).
+	_, releaseA, err := loadOrGetWait(bgCtx, m, "org/model-a", cfg.Models["org/model-a"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-a: %v", err)
+	}
+	releaseA()
+
+	// Request model-b: evicts idle model-a and loads model-b.
+	_, releaseB, err := loadOrGetWait(bgCtx, m, "org/model-b", cfg.Models["org/model-b"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-b (after eviction): %v", err)
+	}
+	releaseB()
+
+	if m.Loaded("org/model-a") {
+		t.Error("model-a should have been evicted")
+	}
+	if !m.Loaded("org/model-b") {
+		t.Error("model-b should be loaded after eviction")
+	}
+
+	// Inject a synthetic proc in stateUnloading to verify that new requests
+	// to a draining model are rejected without waiting.
+	m.mu.Lock()
+	synth := &procState{
+		modelName: "org/draining",
+		state:     stateUnloading,
+		ready:     make(chan struct{}),
+		cancel:    func() {},
+	}
+	m.procs["org/draining"] = synth
+	m.mu.Unlock()
+
+	tick := m.LoadOrGet("org/draining", config.ModelParams{})
+	select {
+	case _, ok := <-tick.Ready():
+		if ok {
+			t.Error("expected failure for unloading model, got address")
+			tick.Release()
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Error("ticket for draining model should fail immediately")
+	}
+	if tick.Err() == nil {
+		t.Error("expected non-nil error for unloading model")
+	}
+
+	// Verify drainAndCancel respects the timeout: create a proc with inflight=1
+	// and confirm cancel() is called after drainTimeout.
+	ps2 := &procState{modelName: "org/timeout-test", cancel: func() {}}
+	ps2.inflight.Add(1)
+	start := time.Now()
+	m.drainTimeout = 100 * time.Millisecond
+	m.drainAndCancel(ps2)
+	elapsed := time.Since(start)
+	if elapsed < 90*time.Millisecond {
+		t.Errorf("drainAndCancel returned in %v; expected to wait ~100ms for timeout", elapsed)
+	}
+}
+
+// TestLoadOrGet_CascadingVRAMEviction verifies that when VRAM is insufficient
+// for a new model, the minimum set of LRU idle models is evicted to make room.
+// Models A and B are loaded without a VRAM tracker. Then a tracker is attached
+// with a mock backend that reports only 2 GiB free, less than model-c's 3 GiB
+// estimate. The cascading eviction must select model-a (LRU) and leave model-b.
+func TestLoadOrGet_CascadingVRAMEviction(t *testing.T) {
+	const (
+		totalVRAM = 8 << 30 // 8 GiB total
+		modelEst  = 3 << 30 // 3 GiB per model
+		// mock backend reports 6 GiB used → 2 GiB free (not enough for model-c)
+		mockUsed = 6 << 30
+	)
+
+	cfg := &config.Config{
+		Models: map[string]config.ModelParams{
+			"org/model-a": {Slots: 1},
+			"org/model-b": {Slots: 1},
+			"org/model-c": {Slots: 1},
+		},
+		MaxModels: 10, // no count-based limit; only VRAM drives eviction
+	}
+
+	m := newTestManager(cfg)
+
+	bgCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(bgCtx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Load model-a first (becomes LRU candidate) — no tracker yet.
+	_, releaseA, err := loadOrGetWait(bgCtx, m, "org/model-a", cfg.Models["org/model-a"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-a: %v", err)
+	}
+	releaseA()
+
+	// Load model-b (more recently used) — still no tracker.
+	_, releaseB, err := loadOrGetWait(bgCtx, m, "org/model-b", cfg.Models["org/model-b"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-b: %v", err)
+	}
+	releaseB()
+
+	// Now attach a VRAM tracker. The mock backend reports 6 GiB used, leaving
+	// only 2 GiB free — insufficient for model-c (3 GiB estimate).
+	backend := &mockVRAMBackend{total: totalVRAM, used: mockUsed}
+	tracker := vram.New(backend, nil)
+	tracker.Discover()
+	tracker.SetEstimate("org/model-a", modelEst)
+	tracker.SetEstimate("org/model-b", modelEst)
+	tracker.SetEstimate("org/model-c", modelEst)
+	m.SetVRAMTracker(tracker)
+
+	// Request model-c: 3 GiB needed, only 2 GiB free → must evict model-a (LRU).
+	_, releaseC, err := loadOrGetWait(bgCtx, m, "org/model-c", cfg.Models["org/model-c"])
+	if err != nil {
+		t.Fatalf("LoadOrGet model-c: %v", err)
+	}
+	releaseC()
+
+	if m.Loaded("org/model-a") {
+		t.Error("model-a should have been evicted (LRU)")
+	}
+	if !m.Loaded("org/model-b") {
+		t.Error("model-b should still be loaded (more recently used)")
+	}
+	if !m.Loaded("org/model-c") {
+		t.Error("model-c should be loaded")
+	}
 }
 
 // ---------------------------------------------------------------------------

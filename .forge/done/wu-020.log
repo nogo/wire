@@ -1,0 +1,14 @@
+WU-020 is done. Here's what was built:
+
+**`internal/gateway/queue/queue.go`** — 150 lines, zero external deps:
+- `Ticket` with `Ready() <-chan string`, `Release()`, `Err() error`
+- `Queue.Enqueue(model, priority, ctx) *Ticket` — returns immediately
+- `Queue.CancelModel(model)` — evicts all waiting tickets with `ErrModelEvicted`
+- Priority tiers map to time budgets (high=30s, medium=15s, low=5s); field is overridable in tests
+- Global depth cap via atomic counter; excess requests get `ErrQueueFull` immediately
+
+**Coalescing design**: the first goroutine per model is the "primary" (calls `LoadFunc` once, sets `loading=true`); concurrent arrivals wait on `loadDone`, then call the loader themselves — which returns instantly since the model is now loaded at the process manager level. No shared state or ref counting needed.
+
+**`internal/gateway/queue/queue_test.go`** — 10 tests covering all AC items: depth cap, priority budgets, coalescing (verified `slowCalls==1`), eviction cancellation, request ctx cancellation, release idempotency, priority ordering under load, multi-model isolation, depth counter reset.
+
+Next: integrate the queue into `gateway.go` (replace `mgr.LoadOrGet` with `queue.Enqueue`) and wire `CancelModel` into the eviction path.

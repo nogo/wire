@@ -1,0 +1,13 @@
+All tests pass. Let me verify the acceptance criteria:
+
+**✅ Warmup models submitted through gateway admission path** — `Gateway.Warmup()` calls `g.q.Enqueue()` → queue's LoadFunc → `mgr.LoadOrGet()` → `evictIfNeeded()` (VRAM + count checks)
+
+**✅ No special privileges** — `mgr.Start()` no longer starts warmup models directly; they go through the same queue path as regular requests
+
+**✅ Bounded retry: 3 attempts over 5 minutes** — `warmupMaxAttempts=3`, `warmupRetryInterval=150s` (2 × 150s = 300s ≈ 5min window)
+
+**✅ Warmup models processed in config order** — `Warmup()` iterates `cfg.Warmup` sequentially, one model at a time
+
+**✅ Warning logged if warmup models can't fit, system still starts** — `slog.Warn("warmup model failed to load after all attempts", ...)`, warmup runs in a background goroutine (`go gw.Warmup(bgCtx)`) so gateway starts immediately
+
+Key changes: `mgr.Start()` now only initializes the context (no warmup). `Gateway.Warmup(ctx)` is the new warmup path — called as a goroutine in `cli.go` after gateway init. 8 process manager tests and 2 integration tests were updated to explicitly load models via `LoadOrGet` instead of relying on `Start()`.

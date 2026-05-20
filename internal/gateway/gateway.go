@@ -20,8 +20,18 @@ import (
 	"time"
 
 	"github.com/nogo/wire/internal/config"
+	"github.com/nogo/wire/internal/gateway/queue"
 	"github.com/nogo/wire/internal/monitor"
 	"github.com/nogo/wire/internal/process"
+)
+
+const (
+	// warmupMaxAttempts is the maximum number of times each warmup model is
+	// submitted through the admission queue before giving up.
+	warmupMaxAttempts = 3
+	// warmupRetryInterval is the delay between consecutive warmup attempts.
+	// Three attempts span roughly 5 minutes (2 × 150 s = 300 s).
+	warmupRetryInterval = 150 * time.Second
 )
 
 // nctxProvider wraps the NCtx lookup; *monitor.Hub satisfies this interface.
@@ -32,10 +42,10 @@ type nctxProvider interface {
 // processManager is the subset of process.Manager the Gateway depends on.
 type processManager interface {
 	Loaded(name string) bool
-	// LoadOrGet returns the backend address for the named model, loading it on
-	// demand if not already running. The caller must call release() when the
-	// proxied request completes to decrement the in-flight counter.
-	LoadOrGet(ctx context.Context, modelName string, params config.ModelParams) (addr string, release func(), err error)
+	// LoadOrGet returns a ticket for the named model, loading it on demand if
+	// not already running. The caller waits on ticket.Ready() for the backend
+	// address and must call ticket.Release() when the request completes.
+	LoadOrGet(modelName string, params config.ModelParams) *process.LoadTicket
 	// ListModels returns all known models in non-idle states.
 	ListModels() []monitor.ModelInfo
 }
@@ -65,16 +75,18 @@ func (c *hfCache) set(ids []string, ttl time.Duration) {
 
 // Gateway is an HTTP reverse-proxy that routes OpenAI-compatible requests to llama-server processes.
 type Gateway struct {
-	cfg        atomic.Pointer[config.Config]
-	mgr        processManager
-	log        *slog.Logger
-	affinity   *affinityTable
-	hub        nctxProvider
-	remote     *monitor.RemoteTracker
-	discovery  *monitor.ModelDiscovery
-	server     *http.Server
-	hfCacheDir string  // HuggingFace hub cache directory; empty disables scanning
-	hfCache    hfCache // cached HF model IDs
+	cfg            atomic.Pointer[config.Config]
+	mgr            processManager
+	q              *queue.Queue
+	log            *slog.Logger
+	affinity       *affinityTable
+	hub            nctxProvider
+	remote         *monitor.RemoteTracker
+	discovery      *monitor.ModelDiscovery
+	server         *http.Server
+	hfCacheDir     string        // HuggingFace hub cache directory; empty disables scanning
+	hfCache        hfCache       // cached HF model IDs
+	warmupInterval time.Duration // 0 → warmupRetryInterval; overridden in tests
 }
 
 // New creates a Gateway backed by the given process manager.
@@ -99,6 +111,34 @@ func newGateway(cfg *config.Config, mgr processManager, hub *monitor.Hub, remote
 
 	g := &Gateway{mgr: mgr, log: log, affinity: newAffinityTable(modelSlots), remote: remote, discovery: discovery}
 	g.cfg.Store(cfg)
+
+	qDepth := cfg.QueueDepth
+	if qDepth <= 0 {
+		qDepth = 200
+	}
+	g.q = queue.New(qDepth, func(ctx context.Context, model string) (string, func(), error) {
+		params, ok := g.cfg.Load().MatchModel(model)
+		if !ok {
+			return "", nil, fmt.Errorf("unknown model: %s", model)
+		}
+		t := g.mgr.LoadOrGet(model, params)
+		select {
+		case addr, ok := <-t.Ready():
+			if !ok {
+				return "", nil, t.Err()
+			}
+			return addr, t.Release, nil
+		case <-ctx.Done():
+			// Drain in background so the manager's in-flight counter stays consistent.
+			go func() {
+				if _, ok := <-t.Ready(); ok {
+					t.Release()
+				}
+			}()
+			return "", nil, ctx.Err()
+		}
+	})
+
 	// Store hub as nctxProvider nil-safely: a nil *monitor.Hub must not become
 	// a non-nil interface value, which would cause g.hub == nil checks to fail.
 	if hub != nil {
@@ -146,6 +186,68 @@ func (g *Gateway) UpdateConfig(cfg *config.Config) {
 	g.cfg.Store(cfg)
 }
 
+// Warmup submits each model in cfg.Warmup through the gateway's admission
+// queue in config order. Each model is attempted up to warmupMaxAttempts times;
+// if VRAM or capacity is insufficient, the attempt is retried after a delay.
+// A warning is logged for any model that fails all attempts; startup continues.
+// Warmup runs until all models are processed or ctx is cancelled.
+func (g *Gateway) Warmup(ctx context.Context) {
+	interval := g.warmupInterval
+	if interval == 0 {
+		interval = warmupRetryInterval
+	}
+	for _, model := range g.cfg.Load().Warmup {
+		if ctx.Err() != nil {
+			return
+		}
+		g.warmupOne(ctx, model, interval)
+	}
+}
+
+func (g *Gateway) warmupOne(ctx context.Context, model string, retryInterval time.Duration) {
+	var lastErr error
+	for attempt := 1; attempt <= warmupMaxAttempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-time.After(retryInterval):
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		ticket := g.q.Enqueue(model, queue.PriorityHigh, ctx)
+		select {
+		case _, ok := <-ticket.Ready():
+			if ok {
+				ticket.Release()
+				g.log.Info("warmup model loaded", "model", model, "attempt", attempt)
+				return
+			}
+			lastErr = ticket.Err()
+		case <-ctx.Done():
+			return
+		}
+
+		if !isWarmupRetryable(lastErr) {
+			break
+		}
+		g.log.Warn("warmup model load attempt failed",
+			"model", model, "attempt", attempt, "max_attempts", warmupMaxAttempts, "error", lastErr)
+	}
+	g.log.Warn("warmup model failed to load after all attempts",
+		"model", model, "attempts", warmupMaxAttempts, "error", lastErr)
+}
+
+func isWarmupRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, queue.ErrQueueFull) ||
+		errors.Is(err, queue.ErrModelEvicted) ||
+		errors.Is(err, process.ErrModelDraining) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
 // handleRoute extracts the model field from the JSON body and proxies to the matching process.
 // If the model is known but not loaded, it is started on demand; the HTTP connection
 // is held open until the model becomes healthy.
@@ -191,16 +293,33 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return // handleRemote handles body rewrite if needed
 	}
 
-	addr, release, err := g.mgr.LoadOrGet(r.Context(), payload.Model, params)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			writeError(w, http.StatusGatewayTimeout, "server_error", "model load timed out: "+err.Error(), "load_timeout")
+	prio := pathPriority(r.URL.Path)
+	ticket := g.q.Enqueue(payload.Model, prio, r.Context())
+	var addr string
+	select {
+	case a, ok := <-ticket.Ready():
+		if !ok {
+			err := ticket.Err()
+			switch {
+			case errors.Is(err, queue.ErrQueueFull):
+				w.Header().Set("Retry-After", "5")
+				writeError(w, http.StatusServiceUnavailable, "server_error", "queue at capacity", "queue_full")
+			case errors.Is(err, queue.ErrModelEvicted), errors.Is(err, process.ErrModelDraining):
+				w.Header().Set("Retry-After", "10")
+				writeError(w, http.StatusServiceUnavailable, "server_error", "model unavailable, retry later", "model_draining")
+			case errors.Is(err, context.DeadlineExceeded):
+				writeError(w, http.StatusGatewayTimeout, "server_error", "model load timed out", "load_timeout")
+			default:
+				writeError(w, http.StatusServiceUnavailable, "server_error", err.Error(), "model_not_loaded")
+			}
 			return
 		}
-		writeError(w, http.StatusServiceUnavailable, "server_error", err.Error(), "model_not_loaded")
+		addr = a
+	case <-r.Context().Done():
+		writeError(w, http.StatusServiceUnavailable, "server_error", "request cancelled", "request_cancelled")
 		return
 	}
-	defer release()
+	defer ticket.Release()
 
 	if g.hub != nil {
 		if nCtx := g.hub.NCtx(payload.Model); nCtx > 0 {
@@ -600,6 +719,18 @@ func extractQuant(base string) string {
 		}
 	}
 	return ""
+}
+
+// pathPriority maps a request path to a queue priority tier.
+func pathPriority(path string) queue.Priority {
+	switch path {
+	case "/v1/completions":
+		return queue.PriorityMedium
+	case "/v1/embeddings", "/v1/rerank":
+		return queue.PriorityLow
+	default:
+		return queue.PriorityHigh
+	}
 }
 
 // writeError writes an OpenAI-format JSON error response.

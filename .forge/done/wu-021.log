@@ -1,0 +1,11 @@
+All tests pass. Here's a summary of what was done:
+
+**`internal/process/manager.go`**
+- Added `os` import
+- Added `setOOMScore(pid, log)` call in `launch()` after `cmd.Start()` succeeds
+- Added `setOOMScore` helper that writes `1000` to `/proc/<pid>/oom_score_adj`; logs a warning on failure rather than aborting, since this is a best-effort protection (unprivileged containers may not allow it)
+
+**`internal/process/manager_test.go`**
+- Added `TestLaunch_OOMScoreAdj` which launches a fake process via `testCmdBuilder` and reads `/proc/<pid>/oom_score_adj` to assert the value is `"1000"`
+
+Note: `syscall.SysProcAttr.OOMScoreAdj` doesn't exist in Go 1.26 on this system — the standard mechanism is writing to the proc file after process start, which is equivalent.
