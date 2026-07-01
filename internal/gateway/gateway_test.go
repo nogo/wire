@@ -924,23 +924,6 @@ func TestGateway_HandleRoute_ModelDraining(t *testing.T) {
 	}
 }
 
-func TestGateway_HandleRoute_QueuePriority(t *testing.T) {
-	tests := []struct {
-		path string
-		want queue.Priority
-	}{
-		{"/v1/chat/completions", queue.PriorityHigh},
-		{"/v1/completions", queue.PriorityMedium},
-		{"/v1/embeddings", queue.PriorityLow},
-		{"/v1/rerank", queue.PriorityLow},
-	}
-	for _, tc := range tests {
-		if got := pathPriority(tc.path); got != tc.want {
-			t.Errorf("pathPriority(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Warmup tests
 // ---------------------------------------------------------------------------

@@ -10,21 +10,6 @@ import (
 	"github.com/nogo/wire/internal/process"
 )
 
-// Priority determines the time budget for a queued request.
-type Priority int
-
-const (
-	PriorityHigh   Priority = 0 // chat completions: 30s budget
-	PriorityMedium Priority = 1 // completions: 15s budget
-	PriorityLow    Priority = 2 // embeddings/rerank: 5s budget
-)
-
-var defaultBudgets = [3]time.Duration{
-	30 * time.Second,
-	15 * time.Second,
-	5 * time.Second,
-}
-
 var (
 	// ErrQueueFull is returned when the global depth cap is exceeded.
 	ErrQueueFull = errors.New("queue at capacity")
@@ -46,14 +31,13 @@ func (mq *modelQueue) load(ctx context.Context, loader LoadFunc, model string) (
 	return loader(ctx, model)
 }
 
-// Queue manages per-model request queuing with time-bounded priority budgets.
+// Queue manages per-model request queuing with a caller-supplied load budget.
 type Queue struct {
 	mu       sync.Mutex
 	models   map[string]*modelQueue
 	depth    atomic.Int64
 	maxDepth int64
 	loader   LoadFunc
-	budgets  [3]time.Duration
 }
 
 // New creates a Queue with the given depth cap and loader function.
@@ -62,13 +46,13 @@ func New(maxDepth int, loader LoadFunc) *Queue {
 		models:   make(map[string]*modelQueue),
 		maxDepth: int64(maxDepth),
 		loader:   loader,
-		budgets:  defaultBudgets,
 	}
 }
 
-// Enqueue registers a request for the given model at the specified priority.
-// Returns a ticket immediately; the caller waits on ticket.Ready() for the backend address.
-func (q *Queue) Enqueue(model string, prio Priority, reqCtx context.Context) *process.LoadTicket {
+// Enqueue registers a request for the given model, bounding the wait for the
+// model to become ready by budget (see process.LoadBudget — automatic from model
+// size). Returns a ticket immediately; the caller waits on ticket.Ready().
+func (q *Queue) Enqueue(model string, budget time.Duration, reqCtx context.Context) *process.LoadTicket {
 	if q.depth.Add(1) > q.maxDepth {
 		q.depth.Add(-1)
 		return process.NewFailedTicket(ErrQueueFull)
@@ -92,7 +76,7 @@ func (q *Queue) Enqueue(model string, prio Priority, reqCtx context.Context) *pr
 		defer q.depth.Add(-1)
 
 		// Combined context: cancelled by request cancellation or the priority budget.
-		ctx, cancel := context.WithTimeout(reqCtx, q.budgets[prio])
+		ctx, cancel := context.WithTimeout(reqCtx, budget)
 		defer cancel()
 
 		// Also watch for model eviction; cancel the load context if evicted.

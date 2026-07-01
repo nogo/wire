@@ -190,7 +190,7 @@ func (g *Gateway) warmupOne(ctx context.Context, model string, retryInterval tim
 			}
 		}
 
-		ticket := g.q.Enqueue(model, queue.PriorityHigh, ctx)
+		ticket := g.q.Enqueue(model, g.loadBudget(model), ctx)
 		select {
 		case _, ok := <-ticket.Ready():
 			if ok {
@@ -268,8 +268,7 @@ func (g *Gateway) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return // handleRemote handles body rewrite if needed
 	}
 
-	prio := pathPriority(r.URL.Path)
-	ticket := g.q.Enqueue(payload.Model, prio, r.Context())
+	ticket := g.q.Enqueue(payload.Model, g.loadBudget(payload.Model), r.Context())
 	var addr string
 	select {
 	case a, ok := <-ticket.Ready():
@@ -611,16 +610,14 @@ func rewriteContextLengthError(resp *http.Response) error {
 	return nil
 }
 
-// pathPriority maps a request path to a queue priority tier.
-func pathPriority(path string) queue.Priority {
-	switch path {
-	case "/v1/completions":
-		return queue.PriorityMedium
-	case "/v1/embeddings", "/v1/rerank":
-		return queue.PriorityLow
-	default:
-		return queue.PriorityHigh
+// loadBudget returns how long a request may wait for the model to become ready,
+// derived automatically from the model's gguf size (config load_timeout overrides).
+func (g *Gateway) loadBudget(model string) time.Duration {
+	var modelPath string
+	if g.idx != nil {
+		modelPath, _, _ = g.idx.Lookup(model)
 	}
+	return process.LoadBudget(modelPath, time.Duration(g.cfg.Load().LoadTimeout))
 }
 
 // writeError writes an OpenAI-format JSON error response.

@@ -110,6 +110,7 @@ func New(cfg *config.Config, log *slog.Logger) *Manager {
 	m := new(Manager)
 	m.cfg = cfg
 	m.log = log
+	m.healthTimeout = time.Duration(cfg.LoadTimeout) // 0 → LoadBudget derives it from model size
 	m.procs = make(map[string]*procState)
 	m.eventCh = make(chan monitor.ServerEvent, 256)
 	m.cmdBuilder = func(ctx context.Context, modelName string, modelPath string, params config.ModelParams) *exec.Cmd {
@@ -716,12 +717,29 @@ func (m *Manager) publishEvent(evt monitor.ServerEvent) {
 	}
 }
 
-// healthCheckTimeout returns the effective health check timeout.
-func (m *Manager) effectiveHealthTimeout() time.Duration {
-	if m.healthTimeout > 0 {
-		return m.healthTimeout
+// LoadBudget returns how long to wait for a model to become healthy after launch.
+// A non-zero override (config load_timeout) is used as-is; otherwise the budget
+// scales with the gguf size — bigger models take longer to read from disk, upload
+// to VRAM, and warm up — clamped to a ceiling. Automatic; no per-model config.
+func LoadBudget(modelPath string, override time.Duration) time.Duration {
+	if override > 0 {
+		return override
 	}
-	return 120 * time.Second
+	const (
+		base  = 60 * time.Second // floor: small models + fixed warmup overhead
+		perGB = 6 * time.Second  // ~read-from-disk + VRAM-upload cost per GB
+		maxB  = 15 * time.Minute // ceiling so a genuinely stuck load still fails
+	)
+	budget := base
+	if modelPath != "" {
+		if info, err := os.Stat(modelPath); err == nil {
+			budget += time.Duration(float64(info.Size()) / (1 << 30) * float64(perGB))
+		}
+	}
+	if budget > maxB {
+		budget = maxB
+	}
+	return budget
 }
 
 // supervise is the per-model restart loop. It runs until ctx is cancelled
@@ -808,6 +826,11 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 		modelPath := ps.modelPath
 		ps.mu.Unlock()
 
+		// How long this model is allowed to load: automatic from gguf size unless
+		// healthTimeout (config load_timeout, or a test override) is set. Scales for
+		// a 27 GB model without any config; healthTimeout is fixed at construction.
+		loadBudget := LoadBudget(modelPath, m.healthTimeout)
+
 		cmd, parser, err := m.launch(ctx, modelName, modelPath, params)
 		if err != nil {
 			m.log.Error("failed to launch llama-server", "model", modelName, "error", err)
@@ -826,7 +849,7 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 			cmd.Process.Kill()
 			cmd.Wait() //nolint:errcheck
 			return
-		case <-time.After(m.effectiveHealthTimeout()):
+		case <-time.After(loadBudget):
 			m.log.Error("timed out waiting for listening port", "model", modelName)
 			cmd.Process.Kill()
 			cmd.Wait() //nolint:errcheck
@@ -843,8 +866,14 @@ func (m *Manager) supervise(ctx context.Context, modelName string) {
 		ps.mu.Unlock()
 
 		loadStart := time.Now()
-		if err := waitHealthy(ctx, port, m.effectiveHealthTimeout()); err != nil {
-			m.log.Error("health check failed on start", "model", modelName, "error", err)
+		if err := waitHealthy(ctx, port, loadBudget); err != nil {
+			// Distinguish an evicted/shut-down model (modelCtx cancelled) from a
+			// genuine load that outran its budget — they need different fixes.
+			cause := "load_timeout"
+			if ctx.Err() != nil {
+				cause = "context_cancelled"
+			}
+			m.log.Error("health check failed on start", "model", modelName, "error", err, "cause", cause)
 			cmd.Process.Kill()
 			cmd.Wait() //nolint:errcheck
 			ps.mu.Lock()

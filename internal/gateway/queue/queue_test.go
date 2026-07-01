@@ -10,17 +10,16 @@ import (
 	"github.com/nogo/wire/internal/process"
 )
 
-// testBudgets replaces the production time budgets with fast values suitable for unit tests.
-var testBudgets = [3]time.Duration{
-	300 * time.Millisecond, // PriorityHigh
-	150 * time.Millisecond, // PriorityMedium
-	50 * time.Millisecond,  // PriorityLow
-}
+// Fast per-request budgets suitable for unit tests, standing in for the
+// size-derived production budgets. Enqueue now takes the budget explicitly.
+const (
+	budgetHigh = 300 * time.Millisecond
+	budgetMed  = 150 * time.Millisecond
+	budgetLow  = 50 * time.Millisecond
+)
 
 func newTestQueue(maxDepth int, loader LoadFunc) *Queue {
-	q := New(maxDepth, loader)
-	q.budgets = testBudgets
-	return q
+	return New(maxDepth, loader)
 }
 
 func immediateLoader(_ context.Context, _ string) (string, func(), error) {
@@ -55,15 +54,15 @@ func TestDepthCap(t *testing.T) {
 	q := newTestQueue(3, loader)
 
 	// Fill queue to capacity.
-	t1 := q.Enqueue("m", PriorityHigh, context.Background())
-	t2 := q.Enqueue("m", PriorityHigh, context.Background())
-	t3 := q.Enqueue("m", PriorityHigh, context.Background())
+	t1 := q.Enqueue("m", budgetHigh, context.Background())
+	t2 := q.Enqueue("m", budgetHigh, context.Background())
+	t3 := q.Enqueue("m", budgetHigh, context.Background())
 
 	// Give goroutines time to start.
 	time.Sleep(20 * time.Millisecond)
 
 	// Fourth request must be rejected immediately.
-	t4 := q.Enqueue("m", PriorityHigh, context.Background())
+	t4 := q.Enqueue("m", budgetHigh, context.Background())
 	select {
 	case _, ok := <-t4.Ready():
 		if ok {
@@ -101,8 +100,8 @@ func TestPriorityBudgets(t *testing.T) {
 
 	q := newTestQueue(200, loader)
 
-	tHigh := q.Enqueue("m", PriorityHigh, context.Background())
-	tLow := q.Enqueue("m", PriorityLow, context.Background())
+	tHigh := q.Enqueue("m", budgetHigh, context.Background())
+	tLow := q.Enqueue("m", budgetLow, context.Background())
 
 	// Low-prio (50ms budget) should time out before the 120ms load completes.
 	select {
@@ -141,8 +140,8 @@ func TestEviction(t *testing.T) {
 
 	q := newTestQueue(200, loader)
 
-	t1 := q.Enqueue("model-b", PriorityHigh, context.Background())
-	t2 := q.Enqueue("model-b", PriorityHigh, context.Background())
+	t1 := q.Enqueue("model-b", budgetHigh, context.Background())
+	t2 := q.Enqueue("model-b", budgetHigh, context.Background())
 
 	// Give goroutines time to enter the load wait.
 	time.Sleep(20 * time.Millisecond)
@@ -184,7 +183,7 @@ func TestRequestContextCancellation(t *testing.T) {
 	q := newTestQueue(200, loader)
 
 	reqCtx, reqCancel := context.WithCancel(context.Background())
-	tk := q.Enqueue("model-c", PriorityHigh, reqCtx)
+	tk := q.Enqueue("model-c", budgetHigh, reqCtx)
 
 	time.Sleep(20 * time.Millisecond)
 	reqCancel()
@@ -212,7 +211,7 @@ func TestTicketRelease(t *testing.T) {
 	}
 
 	q := newTestQueue(200, loader)
-	tk := q.Enqueue("model-d", PriorityHigh, context.Background())
+	tk := q.Enqueue("model-d", budgetHigh, context.Background())
 
 	addr, ok := awaitTicket(t, tk, time.Second)
 	if !ok || addr == "" {
@@ -255,9 +254,9 @@ func TestPriorityOrdering(t *testing.T) {
 
 	q := newTestQueue(200, loader)
 
-	tHigh := q.Enqueue("ordering-model", PriorityHigh, context.Background())
-	tMed := q.Enqueue("ordering-model", PriorityMedium, context.Background())
-	tLow := q.Enqueue("ordering-model", PriorityLow, context.Background())
+	tHigh := q.Enqueue("ordering-model", budgetHigh, context.Background())
+	tMed := q.Enqueue("ordering-model", budgetMed, context.Background())
+	tLow := q.Enqueue("ordering-model", budgetLow, context.Background())
 
 	// Low-prio times out first.
 	select {
@@ -285,8 +284,8 @@ func TestPriorityOrdering(t *testing.T) {
 func TestMultipleModelsIndependent(t *testing.T) {
 	q := newTestQueue(200, immediateLoader)
 
-	tA := q.Enqueue("model-x", PriorityHigh, context.Background())
-	tB := q.Enqueue("model-y", PriorityHigh, context.Background())
+	tA := q.Enqueue("model-x", budgetHigh, context.Background())
+	tB := q.Enqueue("model-y", budgetHigh, context.Background())
 
 	addrA, okA := awaitTicket(t, tA, time.Second)
 	addrB, okB := awaitTicket(t, tB, time.Second)
@@ -304,8 +303,8 @@ func TestMultipleModelsIndependent(t *testing.T) {
 func TestDepthCounterResets(t *testing.T) {
 	q := newTestQueue(2, immediateLoader)
 
-	t1 := q.Enqueue("m", PriorityHigh, context.Background())
-	t2 := q.Enqueue("m", PriorityHigh, context.Background())
+	t1 := q.Enqueue("m", budgetHigh, context.Background())
+	t2 := q.Enqueue("m", budgetHigh, context.Background())
 
 	awaitTicket(t, t1, time.Second)
 	awaitTicket(t, t2, time.Second)
@@ -314,7 +313,7 @@ func TestDepthCounterResets(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Should be able to enqueue again.
-	t3 := q.Enqueue("m", PriorityHigh, context.Background())
+	t3 := q.Enqueue("m", budgetHigh, context.Background())
 	_, ok := awaitTicket(t, t3, time.Second)
 	if !ok {
 		t.Errorf("expected ticket to succeed after depth reset: %v", t3.Err())

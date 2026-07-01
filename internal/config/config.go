@@ -64,6 +64,7 @@ type Config struct {
 	HFCacheDir   string                 `yaml:"hf_cache_dir"`
 	ModelDirs    []string               `yaml:"model_dirs"`
 	DrainTimeout Duration               `yaml:"drain_timeout"`
+	LoadTimeout  Duration               `yaml:"load_timeout"`
 	QueueDepth   int                    `yaml:"queue_depth"`
 	Providers    map[string]Provider    `yaml:"providers"`
 	Models       map[string]ModelParams `yaml:"models"`
@@ -189,6 +190,8 @@ func applyDefaults(cfg *Config) {
 		home, _ := os.UserHomeDir()
 		cfg.HFCacheDir = filepath.Join(home, ".cache", "huggingface", "hub")
 	}
+	// LoadTimeout intentionally has no default: 0 means "derive automatically from
+	// model size" (see process.LoadBudget). Set it only to override/cap that.
 	if cfg.DrainTimeout == Duration(0) {
 		cfg.DrainTimeout = Duration(30 * time.Second)
 	} else {
