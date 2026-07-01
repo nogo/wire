@@ -21,7 +21,9 @@ var (
 	reSlotRel   = regexp.MustCompile(`slot\s+(?:(\d+)\s+released|release:\s+id\s+(\d+)\s+\|.*\|\s+stop processing)`)
 	reModelLoad = regexp.MustCompile(`load_tensors:\s+offloading\s+(\d+)\s+(?:repeating\s+)?layers\s+to\s+GPU`)
 	reVRAMAlloc = regexp.MustCompile(`load_tensors:\s+\S+\s+(?:model\s+)?buffer\s+size\s*=\s*([\d.]+)\s*MiB`)
-	reListen    = regexp.MustCompile(`server is listening on http://[\d.]+:(\d+)`)
+	// Matches both the old "main: server is listening on http://IP:PORT" and the
+	// newer "llama_server: listening on http://IP:PORT" log line.
+	reListen    = regexp.MustCompile(`listening on http://[\d.]+:(\d+)`)
 )
 
 // EventParser implements io.Writer. It buffers bytes, splits on newlines,

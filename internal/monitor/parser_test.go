@@ -305,6 +305,58 @@ func TestParser_VRAMAlloc_NewFormat(t *testing.T) {
 	}
 }
 
+// TestParser_ListeningPort covers the old "main: server is listening on ..." line.
+func TestParser_ListeningPort(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	p.Write([]byte("main: server is listening on http://127.0.0.1:8080 - starting the main loop\n")) //nolint:errcheck
+
+	select {
+	case port := <-p.PortCh:
+		if port != 8080 {
+			t.Errorf("port: got %d, want 8080", port)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no port on PortCh — listening regex may be stale")
+	}
+}
+
+// TestParser_ListeningPort_NewFormat covers the current llama.cpp line
+// "llama_server: listening on http://IP:PORT" (note: no "server is" prefix).
+// This exact format drift silently broke on-demand model loading — the port was
+// never parsed, so wire waited out the whole load budget and killed a healthy
+// child. Keep both formats covered so it cannot regress unnoticed.
+func TestParser_ListeningPort_NewFormat(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	p.Write([]byte("0.03.514.560 I srv  llama_server: listening on http://127.0.0.1:39009\n")) //nolint:errcheck
+
+	select {
+	case port := <-p.PortCh:
+		if port != 39009 {
+			t.Errorf("port: got %d, want 39009", port)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no port on PortCh — listening regex does not match current llama-server format")
+	}
+}
+
+// A line without a listening announcement must not emit a port.
+func TestParser_NoListeningPort(t *testing.T) {
+	ch := make(chan ServerEvent, 4)
+	p := newTestParser(ch)
+
+	p.Write([]byte("some unrelated log line about http://example.com:1234\n")) //nolint:errcheck
+
+	select {
+	case port := <-p.PortCh:
+		t.Fatalf("unexpected port %d parsed from a non-listening line", port)
+	default:
+	}
+}
+
 // TestParser_LiveLlamaServer verifies that the parser regexes match actual
 // llama-server output. This catches silent breakage when llama-server changes
 // its log format. Requires llama-server on PATH and a small GGUF model cached.
