@@ -1,5 +1,7 @@
 # Wire
 
+> **Retired (2026-10-24).** llama-server in router mode (`--models-preset`) now does what Wire was built for: on-demand loading, LRU eviction, per-model flags and a shared prompt cache. Wire is no longer developed. The reasons are in [docs/project.md](docs/project.md#status-retired-2026-10-24).
+
 Single-port OpenAI-compatible inference gateway that owns the full lifecycle of llama-server processes. One binary, one config file, one port.
 
 Applications talk OpenAI; Wire handles everything behind it — process supervision, model loading, slot routing, GPU awareness, live telemetry.
