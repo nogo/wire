@@ -1,5 +1,23 @@
 # Wire
 
+## Status: retired (2026-10-24)
+
+Wire is no longer developed. llama-server in router mode now does the job Wire was built for:
+
+- It loads models on demand and evicts the least recently used one.
+- It keeps settings per model in a preset INI file, including mixed flags such as embedding pooling.
+- It keeps a prompt cache that any slot can use.
+
+A single router with a preset file replaces Wire.
+
+Measurements on an AMD APU with an integrated GPU (Radeon 890M, DDR5 shared memory) showed that the limit is memory bandwidth, not the gateway. The dense 27B reaches about 83% of RAM bandwidth at 4.5 tok/s. Speed comes from the choice of model: a MoE with 3B active parameters writes 5× faster and reads prompts 4–7× faster. Speculative decoding adds more, and both run inside llama.cpp. What only Wire had, VRAM-aware admission and the GPU dashboard, is not needed on one machine with one or two models.
+
+The idea that grew out of this re-evaluation, a memory combined with fast judgement and slow reasoning, does not belong in a proxy. It moves to knotenpunkt.
+
+The rest of this document describes Wire as it was built.
+
+---
+
 Single-port OpenAI-compatible inference gateway that owns the full lifecycle of llama-server processes. One binary, one config file, one port. Applications talk OpenAI; Wire handles everything behind it — process supervision, model loading, slot routing, GPU awareness, live telemetry.
 
 Wire is not a model runner. It is the layer between your application and llama-server that makes local inference feel like a managed service.
